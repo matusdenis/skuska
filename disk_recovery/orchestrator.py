@@ -327,9 +327,12 @@ Príklady:
 
     max_scan = parse_size(args.max_scan) if args.max_scan else None
 
-    if not args.load_scan and not os.path.exists(args.device):
-        print(f"[CHYBA] Zariadenie/súbor {args.device!r} neexistuje.", file=sys.stderr)
-        sys.exit(1)
+    if not args.load_scan:
+        for d in args.device.split(","):
+            d = d.strip()
+            if not os.path.exists(d):
+                print(f"[CHYBA] Zariadenie/súbor {d!r} neexistuje.", file=sys.stderr)
+                sys.exit(1)
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("[CHYBA] Nastavte ANTHROPIC_API_KEY.", file=sys.stderr)
