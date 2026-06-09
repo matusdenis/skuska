@@ -74,7 +74,21 @@ class ScanReport:
         return json.dumps(d, indent=2)
 
 
-def _get_device_size(fd: int) -> int:
+def _get_device_size(fd: int, device_path: str = "") -> int:
+    import platform
+    if platform.system() == "Darwin" and device_path:
+        try:
+            import subprocess
+            out = subprocess.check_output(["diskutil", "info", device_path], text=True)
+            for line in out.splitlines():
+                if "Disk Size:" in line:
+                    parts = line.split("(")
+                    if len(parts) > 1:
+                        bytes_str = parts[1].split(" Bytes")[0]
+                        return int(bytes_str)
+        except Exception:
+            pass
+        
     import fcntl, struct as st
     try:
         buf = fcntl.ioctl(fd, 0x80081272, b" " * 8)
@@ -165,7 +179,7 @@ def scan_device(
     Skenuje zariadenie alebo disk image a vracia ScanReport.
     """
     fd = os.open(device_path, os.O_RDONLY | os.O_NONBLOCK)
-    dev_size = _get_device_size(fd)
+    dev_size = _get_device_size(fd, device_path)
 
     report = ScanReport(
         device=device_path,

@@ -41,10 +41,11 @@ def parse_size(s: str) -> int:
 
 
 def human(n: int) -> str:
+    n = float(n)
     for u in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
             return f"{n:.1f} {u}"
-        n //= 1024
+        n /= 1024
     return f"{n:.1f} PB"
 
 
@@ -96,10 +97,8 @@ def run_recovery(
             multi_scans[dev] = json.loads(r.to_json())
             
         print("\n  Agent 1 analyzuje vzory diskov (JBOD vs RAID0)...")
-        # Zavoláme špeciálnu promptu pre RAID analýzu (alebo použijeme existujúceho agenta)
-        # Pre jednoduchosť tu pridáme rýchle vyhodnotenie alebo agent fallback
+        # Zavoláme špeciálnu promptu pre RAID analýzu
         raid_analysis_prompt = json.dumps(multi_scans)
-        from agents import run_map_analyst
         analysis = run_map_analyst(raid_analysis_prompt)
         
         # Extrahujeme AI rozhodnutie

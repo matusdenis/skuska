@@ -36,10 +36,11 @@ app = Flask(__name__)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _human(n: int) -> str:
+    n = float(n)
     for u in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
             return f"{n:.1f} {u}"
-        n //= 1024
+        n /= 1024
     return f"{n:.1f} PB"
 
 
@@ -93,8 +94,13 @@ def list_disks() -> list[dict]:
                 model = info.get("MediaName", disk)
                 size  = info.get("TotalSize", 0)
                 size_h = _human(size) if isinstance(size, int) else "?"
+                
+                # Zistíme či je to len virtuálny kontajner
+                is_virtual = info.get("VirtualOrPhysical") == "Virtual" or info.get("Virtual") == True
+                label_suffix = "  [APFS Virtual]" if is_virtual else ""
+                
                 disks.append({"path": path,
-                               "label": f"{path}  [{size_h}]  {model}",
+                               "label": f"{path}  [{size_h}]  {model}{label_suffix}",
                                "size": size_h, "type": "disk"})
         except Exception:
             pass
@@ -690,6 +696,8 @@ async function openModal(target) {
   await mBrowse(start);
   document.getElementById('ov').classList.add('open');
 }
+
+
 function closeModal() { document.getElementById('ov').classList.remove('open'); }
 function ovOutside(e) { if (e.target===document.getElementById('ov')) closeModal(); }
 
@@ -737,13 +745,26 @@ function setStatus(s, t) {
 // ═══════════════════════════════════════════════════════════════
 //  TERMINAL
 // ═══════════════════════════════════════════════════════════════
+let lastWasProgress = false;
 function log(txt, cls='info') {
   const t = document.getElementById('terminal');
-  const d = document.createElement('div');
-  d.className='ll '+cls; d.textContent=txt;
-  t.appendChild(d); t.scrollTop=t.scrollHeight;
+  const isProgress = txt.match(/^\s*\[[#\-]+\]\s+\d+\.\d+%\s+/);
+  
+  if (isProgress && lastWasProgress && t.lastElementChild) {
+    t.lastElementChild.textContent = txt;
+  } else {
+    const d = document.createElement('div');
+    d.className='ll '+cls; d.textContent=txt;
+    t.appendChild(d);
+  }
+  
+  lastWasProgress = !!isProgress;
+  t.scrollTop=t.scrollHeight;
 }
-function clearTerminal() { document.getElementById('terminal').innerHTML=''; }
+function clearTerminal() { 
+  document.getElementById('terminal').innerHTML=''; 
+  lastWasProgress = false;
+}
 function classify(l) {
   if (l.startsWith('[Fáza')||l.startsWith('===')||l.startsWith('---')) return 'phase';
   if (l.includes('[Agent')||l.includes('Agent ')) return 'agent';
