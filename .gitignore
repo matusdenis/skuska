@@ -3,3 +3,5 @@
 __pycache__/
 *.img
 recovered/
+DiskRecovery.app/
+recovered_test/
