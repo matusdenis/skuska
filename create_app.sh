@@ -8,80 +8,70 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="DiskRecovery"
 APP_DIR="$SCRIPT_DIR/$APP_NAME.app"
 MACOS_DIR="$APP_DIR/Contents/MacOS"
-RESOURCES_DIR="$APP_DIR/Contents/Resources"
 PYTHON_BIN="$(which python3)"
 
-echo "📦 Vytváram $APP_NAME.app..."
+echo "Vytváram $APP_NAME.app..."
 
-# Vymaž starú verziu
 rm -rf "$APP_DIR"
-
-# Vytvor štruktúru .app
 mkdir -p "$MACOS_DIR"
-mkdir -p "$RESOURCES_DIR"
+mkdir -p "$APP_DIR/Contents/Resources"
 
-# ── Info.plist ────────────────────────────────────────────────
-cat > "$APP_DIR/Contents/Info.plist" << EOF
+# Zapíš Python cestu a projekt do Resources
+echo "$PYTHON_BIN" > "$APP_DIR/Contents/Resources/python_path.txt"
+echo "$SCRIPT_DIR"  > "$APP_DIR/Contents/Resources/project_dir.txt"
+
+# Info.plist
+cat > "$APP_DIR/Contents/Info.plist" << PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key>
-  <string>$APP_NAME</string>
-  <key>CFBundleDisplayName</key>
-  <string>Disk Recovery AI</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.skuska.diskrecovery</string>
-  <key>CFBundleVersion</key>
-  <string>1.0</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleExecutable</key>
-  <string>$APP_NAME</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>12.0</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-  <key>LSUIElement</key>
-  <false/>
+  <key>CFBundleName</key><string>DiskRecovery</string>
+  <key>CFBundleDisplayName</key><string>Disk Recovery AI</string>
+  <key>CFBundleIdentifier</key><string>com.skuska.diskrecovery</string>
+  <key>CFBundleVersion</key><string>1.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>DiskRecovery</string>
+  <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
-EOF
+PLISTEOF
 
-# ── Spustiteľný skript ─────────────────────────────────────────
-EXEC_PATH="$MACOS_DIR/$APP_NAME"
-cat > "$EXEC_PATH" << BASHEOF
-#!/bin/bash
-# Disk Recovery AI — macOS launcher
+# Spustiteľný skript — zapisujeme cez python aby sa vyhlo problémom s heredoc escaping
+python3 - << PYEOF
+import os, stat
 
-# Pracovný adresár = priečinok kde leží .app
-APP_PATH="\$(dirname "\$(dirname "\$(dirname "\$(realpath "\$0")")")")"
-PROJECT_DIR="\$(dirname "\$APP_PATH")"
+script = r"""#!/bin/bash
+RESOURCES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+PYTHON_BIN="$(cat "$RESOURCES/python_path.txt")"
+PROJECT_DIR="$(cat "$RESOURCES/project_dir.txt")"
 
-cd "\$PROJECT_DIR" || exit 1
+[ -f "$PYTHON_BIN" ] || PYTHON_BIN="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+[ -f "$PYTHON_BIN" ] || PYTHON_BIN="/opt/homebrew/bin/python3"
+[ -f "$PYTHON_BIN" ] || PYTHON_BIN="$(which python3)"
 
-# Načítaj .env
+cd "$PROJECT_DIR" || exit 1
+
 if [ -f ".env" ]; then
-  export \$(grep -v '^#' .env | xargs) 2>/dev/null
+  set -a
+  source .env
+  set +a
 fi
 
-# Spusti launcher.py
-PYTHON="$PYTHON_BIN"
+exec "$PYTHON_BIN" "$PROJECT_DIR/launcher.py"
+"""
 
-# Ak Python neexistuje, skús štandardné miesta
-if [ ! -f "\$PYTHON" ]; then
-  for P in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
-    if [ -f "\$P" ]; then PYTHON="\$P"; break; fi
-  done
-fi
+path = "$MACOS_DIR/$APP_NAME"
+with open(path, "w") as f:
+    f.write(script)
+os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+print("  Skript zapísaný.")
+PYEOF
 
-exec "\$PYTHON" "\$PROJECT_DIR/launcher.py"
-BASHEOF
+# Odstráň quarantine (Gatekeeper)
+xattr -cr "$APP_DIR" 2>/dev/null || true
 
-chmod +x "$EXEC_PATH"
-
-echo "✅ $APP_NAME.app vytvorený v: $SCRIPT_DIR"
 echo ""
-echo "Použi: open '$APP_DIR'"
-echo "alebo presuň DiskRecovery.app do /Applications"
+echo "✅ $APP_NAME.app je v: $SCRIPT_DIR"
+echo "   Dvojklikni na DiskRecovery.app"
+echo "   Ak macOS zablokuje: Pravý klik → Otvoriť"

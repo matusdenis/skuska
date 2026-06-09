@@ -2,7 +2,7 @@
 """
 launcher.py — Disk Recovery AI — natívny macOS launcher
 
-Spustí Flask server na pozadí a otvorí natívne macOS okno (WKWebView).
+Spustí Flask server na pozadí a otvorí app v Safari.
 Dvojklik na DiskRecovery.app → všetko sa spustí automaticky.
 """
 
@@ -10,11 +10,12 @@ import os
 import sys
 import time
 import threading
+import subprocess
 import urllib.request
 from pathlib import Path
 
-# ── Nastav pracovný adresár na root projektu ──────────────────
-ROOT = Path(__file__).parent
+# ── Pracovný adresár = root projektu ─────────────────────────
+ROOT = Path(__file__).parent.resolve()
 os.chdir(ROOT)
 
 # ── Načítaj .env ──────────────────────────────────────────────
@@ -34,14 +35,19 @@ URL  = f"http://localhost:{PORT}"
 
 # ── Spusti Flask server v background threade ─────────────────
 def _start_flask():
-    from disk_recovery.ui import app
-    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True, use_reloader=False)
+    from disk_recovery.ui import app as flask_app
+    flask_app.run(
+        host="127.0.0.1",
+        port=PORT,
+        debug=False,
+        threaded=True,
+        use_reloader=False,
+    )
 
 flask_thread = threading.Thread(target=_start_flask, daemon=True)
 flask_thread.start()
 
 # ── Počkaj kým Flask naštartuje (max 10s) ────────────────────
-print("Štartujem Disk Recovery AI...")
 for _ in range(20):
     try:
         urllib.request.urlopen(URL, timeout=1)
@@ -49,34 +55,26 @@ for _ in range(20):
     except Exception:
         time.sleep(0.5)
 else:
-    print(f"[CHYBA] Flask server sa nespustil na {URL}")
+    subprocess.run([
+        "osascript", "-e",
+        'display alert "Disk Recovery AI" message "Flask server sa nespustil." as critical'
+    ])
     sys.exit(1)
 
-print(f"Server beží na {URL}")
+# ── Otvor v Safari ────────────────────────────────────────────
+subprocess.run(["open", "-a", "Safari", URL])
 
-# ── Otvor natívne macOS okno ─────────────────────────────────
+# ── Drž server živý kým je Safari otvorené ───────────────────
+# Kontrolujeme každé 2s či Safari stále beží
 try:
-    import webview
-
-    window = webview.create_window(
-        title="Disk Recovery AI",
-        url=URL,
-        width=1280,
-        height=820,
-        min_size=(900, 600),
-        background_color="#0f1117",
-    )
-
-    webview.start(debug=False)
-
-except ImportError:
-    # Fallback: otvor v prehliadači ak pywebview nie je k dispozícii
-    import subprocess
-    print("pywebview nie je nainštalovaný — otváram v prehliadači...")
-    subprocess.Popen(["open", URL])
-    # Drž server živý
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        pass
+    while True:
+        time.sleep(2)
+        result = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to (name of processes) contains "Safari"'],
+            capture_output=True, text=True,
+        )
+        # Ak Safari bolo zavreté, ukončíme server
+        # (voliteľné — môžeme nechať bežať neobmedzene)
+except KeyboardInterrupt:
+    pass

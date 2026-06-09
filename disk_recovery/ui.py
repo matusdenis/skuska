@@ -509,17 +509,7 @@ async function loadDisks() {
 // ═══════════════════════════════════════════════════════════════
 //  FILE EXPLORER
 // ═══════════════════════════════════════════════════════════════
-const EXT_ICONS = {
-  '.jpg':'.jpeg':'.png':'.gif':'.bmp':'.webp': '🖼',
-  '.pdf': '📕', '.txt':'.log':'.md': '📄',
-  '.zip':'.gz':'.7z':'.tar':'.bz2': '🗜',
-  '.mp4':'.mkv':'.avi':'.mov': '🎬',
-  '.mp3':'.flac':'.wav':'.aac': '🎵',
-  '.db':'.sqlite': '🗃',
-  '.json': '📋',
-  '.img':'.iso': '💽',
-  '.sh':'.py':'.js':'.ts': '⚙',
-};
+
 // simpler lookup
 function extIcon(ext) {
   const map = {'🖼':['.jpg','.jpeg','.png','.gif','.bmp','.webp'],
