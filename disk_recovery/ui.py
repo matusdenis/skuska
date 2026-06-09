@@ -9,22 +9,31 @@ Otvor v prehliadači: http://localhost:5000
 """
 
 import json
+import mimetypes
 import os
 import platform
-import re
 import subprocess
 import sys
 import threading
 from pathlib import Path
-from flask import Flask, Response, jsonify, render_template_string, request
+from flask import Flask, Response, jsonify, render_template_string, request, send_file
 
 app = Flask(__name__)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _human(n: int) -> str:
+    for u in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f} {u}"
+        n //= 1024
+    return f"{n:.1f} PB"
 
 
 # ── Disk detection ────────────────────────────────────────────────────────────
 
 def list_disks() -> list[dict]:
-    """Vráti zoznam fyzických diskov a .img súborov."""
     disks = []
     system = platform.system()
 
@@ -37,79 +46,59 @@ def list_disks() -> list[dict]:
             data = json.loads(out)
             for dev in data.get("blockdevices", []):
                 if dev.get("type") in ("disk", "loop"):
-                    name = dev["name"]
-                    path = f"/dev/{name}"
+                    name  = dev["name"]
+                    path  = f"/dev/{name}"
                     model = (dev.get("model") or "").strip() or name
                     size  = dev.get("size", "?")
                     tran  = dev.get("tran") or "—"
-                    disks.append({
-                        "path":  path,
-                        "label": f"{path}  [{size}]  {model}  ({tran})",
-                        "size":  size,
-                        "type":  "disk",
-                    })
+                    disks.append({"path": path,
+                                  "label": f"{path}  [{size}]  {model}  ({tran})",
+                                  "size": size, "type": "disk"})
         except Exception:
-            # Fallback: /proc/partitions
             try:
                 with open("/proc/partitions") as f:
                     for line in f:
                         parts = line.split()
                         if len(parts) == 4 and parts[3].startswith("sd"):
-                            name = parts[3]
-                            disks.append({
-                                "path":  f"/dev/{name}",
-                                "label": f"/dev/{name}",
-                                "size":  "",
-                                "type":  "disk",
-                            })
+                            disks.append({"path": f"/dev/{parts[3]}",
+                                          "label": f"/dev/{parts[3]}",
+                                          "size": "", "type": "disk"})
             except Exception:
                 pass
 
-    elif system == "Darwin":  # macOS
+    elif system == "Darwin":
         try:
-            out = subprocess.check_output(
-                ["diskutil", "list", "-plist"],
-                text=True, stderr=subprocess.DEVNULL,
-            )
-            # Parse plist output
             import plistlib
+            out = subprocess.check_output(["diskutil", "list", "-plist"],
+                                          text=True, stderr=subprocess.DEVNULL)
             data = plistlib.loads(out.encode())
             for disk in data.get("WholeDisks", []):
                 info_raw = subprocess.check_output(
                     ["diskutil", "info", "-plist", disk],
-                    text=True, stderr=subprocess.DEVNULL,
-                )
-                info = plistlib.loads(info_raw.encode())
+                    text=True, stderr=subprocess.DEVNULL)
+                info  = plistlib.loads(info_raw.encode())
                 path  = info.get("DeviceNode", f"/dev/{disk}")
                 model = info.get("MediaName", disk)
                 size  = info.get("TotalSize", 0)
                 size_h = _human(size) if isinstance(size, int) else "?"
-                disks.append({
-                    "path":  path,
-                    "label": f"{path}  [{size_h}]  {model}",
-                    "size":  size_h,
-                    "type":  "disk",
-                })
+                disks.append({"path": path,
+                               "label": f"{path}  [{size_h}]  {model}",
+                               "size": size_h, "type": "disk"})
         except Exception:
             pass
 
-    # Disk images in current working tree
     cwd = Path(__file__).parent.parent
     for img in sorted(cwd.rglob("*.img"))[:20]:
-        rel = str(img.relative_to(cwd))
+        rel   = str(img.relative_to(cwd))
         size_h = _human(img.stat().st_size)
-        disks.append({
-            "path":  rel,
-            "label": f"{rel}  [{size_h}]  disk image",
-            "size":  size_h,
-            "type":  "image",
-        })
-
+        disks.append({"path": rel, "label": f"{rel}  [{size_h}]  disk image",
+                      "size": size_h, "type": "image"})
     return disks
 
 
+# ── File browser ──────────────────────────────────────────────────────────────
+
 def browse_dir(path: str) -> dict:
-    """Vráti obsah adresára pre file browser."""
     p = Path(path).expanduser().resolve()
     if not p.exists():
         p = Path.home()
@@ -117,275 +106,190 @@ def browse_dir(path: str) -> dict:
     entries = []
     try:
         items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
-        for item in items[:200]:
+        for item in items[:500]:
             try:
                 is_dir = item.is_dir()
-                size = "" if is_dir else _human(item.stat().st_size)
+                stat   = item.stat()
                 entries.append({
-                    "name":   item.name,
-                    "path":   str(item),
-                    "is_dir": is_dir,
-                    "size":   size,
+                    "name":     item.name,
+                    "path":     str(item),
+                    "is_dir":   is_dir,
+                    "size":     "" if is_dir else _human(stat.st_size),
+                    "size_raw": 0 if is_dir else stat.st_size,
+                    "ext":      item.suffix.lower() if not is_dir else "",
                 })
             except PermissionError:
                 pass
     except PermissionError:
         pass
 
-    # Parent
-    parent = str(p.parent) if p.parent != p else None
-
     return {
         "current": str(p),
-        "parent":  parent,
+        "parent":  str(p.parent) if p.parent != p else None,
         "entries": entries,
     }
 
 
-def _human(n: int) -> str:
-    for u in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.1f} {u}"
-        n //= 1024
-    return f"{n:.1f} PB"
-
-
 # ── HTML ──────────────────────────────────────────────────────────────────────
 
-HTML = """
+HTML = r"""
 <!DOCTYPE html>
 <html lang="sk">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Disk Recovery AI</title>
 <style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f1117;color:#e2e8f0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
-body {
-  font-family: 'Segoe UI', system-ui, sans-serif;
-  background: #0f1117; color: #e2e8f0;
-  min-height: 100vh; display: flex; flex-direction: column;
-}
+/* header */
+header{background:#1a1d2e;border-bottom:1px solid #2d3150;padding:.75rem 1.5rem;display:flex;align-items:center;gap:.6rem;flex-shrink:0}
+header h1{font-size:1.15rem;font-weight:600;color:#a78bfa}
+.badge{font-size:.68rem;padding:.15rem .55rem;border-radius:9999px;font-weight:600}
+.badge-ai{background:#312e81;color:#a5b4fc}
+.badge-apfs{background:#1e3a5f;color:#7dd3fc}
 
-header {
-  background: #1a1d2e; border-bottom: 1px solid #2d3150;
-  padding: 1rem 2rem; display: flex; align-items: center; gap: 0.75rem;
-}
-header h1 { font-size: 1.25rem; font-weight: 600; color: #a78bfa; }
-.badge {
-  display: inline-flex; align-items: center;
-  font-size: 0.7rem; padding: 0.2rem 0.6rem;
-  border-radius: 9999px; font-weight: 600;
-}
-.badge-ai   { background: #312e81; color: #a5b4fc; }
-.badge-apfs { background: #1e3a5f; color: #7dd3fc; }
+/* layout */
+main{flex:1;display:grid;grid-template-columns:370px 1fr;overflow:hidden}
 
-main {
-  flex: 1; display: grid; grid-template-columns: 400px 1fr;
-  overflow: hidden;
-}
+/* ── left panel ── */
+.lpanel{background:#1a1d2e;border-right:1px solid #2d3150;padding:1.1rem;overflow-y:auto;display:flex;flex-direction:column;gap:1rem}
+.sec{font-size:.67rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:.35rem}
+label{font-size:.81rem;color:#94a3b8;display:block;margin-bottom:.28rem}
+input[type=text],select{width:100%;background:#0f1117;border:1px solid #2d3150;border-radius:6px;color:#e2e8f0;padding:.42rem .65rem;font-size:.86rem;outline:none;transition:border-color .15s}
+input[type=text]:focus{border-color:#7c3aed}
 
-/* ── Left panel ── */
-.panel {
-  background: #1a1d2e; border-right: 1px solid #2d3150;
-  padding: 1.25rem; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 1.1rem;
-}
-.section-title {
-  font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.08em; color: #64748b; margin-bottom: 0.4rem;
-}
-label { font-size: 0.82rem; color: #94a3b8; display: block; margin-bottom: 0.3rem; }
+.irow{display:flex;gap:.35rem}
+.irow input{flex:1}
+.ibtn{background:#1e2235;border:1px solid #2d3150;border-radius:6px;color:#94a3b8;cursor:pointer;padding:0 .55rem;font-size:.95rem;transition:background .15s;flex-shrink:0}
+.ibtn:hover{background:#2d3150;color:#e2e8f0}
 
-input[type=text], select {
-  width: 100%; background: #0f1117; border: 1px solid #2d3150;
-  border-radius: 6px; color: #e2e8f0; padding: 0.45rem 0.7rem;
-  font-size: 0.88rem; outline: none; transition: border-color 0.15s;
-}
-input[type=text]:focus, select:focus { border-color: #7c3aed; }
+/* disk list */
+.dlist{max-height:150px;overflow-y:auto;border:1px solid #2d3150;border-radius:6px;background:#0f1117}
+.ditem{display:flex;align-items:center;gap:.5rem;padding:.42rem .65rem;cursor:pointer;border-bottom:1px solid #1a1d2e;font-size:.8rem;transition:background .1s}
+.ditem:last-child{border-bottom:none}
+.ditem:hover{background:#1a1d2e}
+.ditem.sel{background:#1e1b4b;border-left:2px solid #7c3aed}
+.dpath{color:#e2e8f0;font-family:monospace;font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.dmeta{color:#64748b;font-size:.7rem}
+.dsize{color:#a78bfa;font-size:.72rem;font-weight:600;flex-shrink:0}
 
-/* Input with button */
-.input-row { display: flex; gap: 0.4rem; }
-.input-row input { flex: 1; }
-.icon-btn {
-  background: #1e2235; border: 1px solid #2d3150; border-radius: 6px;
-  color: #94a3b8; cursor: pointer; padding: 0 0.6rem; font-size: 1rem;
-  transition: background 0.15s; white-space: nowrap; flex-shrink: 0;
-}
-.icon-btn:hover { background: #2d3150; color: #e2e8f0; }
+/* toggles */
+.trow{display:flex;align-items:center;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid #2d3150}
+.trow:last-child{border-bottom:none}
+.tlbl{font-size:.82rem;color:#cbd5e1}
+.tdsc{font-size:.7rem;color:#475569;margin-top:.08rem}
+.sw{position:relative;width:34px;height:18px;flex-shrink:0}
+.sw input{opacity:0;width:0;height:0}
+.sl{position:absolute;inset:0;background:#334155;border-radius:18px;cursor:pointer;transition:background .2s}
+.sl::before{content:'';position:absolute;width:12px;height:12px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s}
+.sw input:checked+.sl{background:#7c3aed}
+.sw input:checked+.sl::before{transform:translateX(16px)}
 
-/* Disk selector */
-.disk-list {
-  max-height: 160px; overflow-y: auto;
-  border: 1px solid #2d3150; border-radius: 6px;
-  background: #0f1117;
-}
-.disk-item {
-  display: flex; align-items: center; gap: 0.6rem;
-  padding: 0.5rem 0.75rem; cursor: pointer;
-  border-bottom: 1px solid #1a1d2e; font-size: 0.82rem;
-  transition: background 0.1s;
-}
-.disk-item:last-child { border-bottom: none; }
-.disk-item:hover { background: #1a1d2e; }
-.disk-item.selected { background: #1e1b4b; border-left: 2px solid #7c3aed; }
-.disk-icon { font-size: 1rem; flex-shrink: 0; }
-.disk-info { flex: 1; overflow: hidden; }
-.disk-path { color: #e2e8f0; font-family: monospace; font-size: 0.8rem;
-             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.disk-meta { color: #64748b; font-size: 0.72rem; }
-.disk-size { color: #a78bfa; font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
-.disk-refresh {
-  display: flex; justify-content: flex-end; margin-top: 0.3rem;
-}
+/* buttons */
+.btn{width:100%;padding:.58rem;border:none;border-radius:8px;font-size:.86rem;font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s}
+.btn:active{transform:scale(.98)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-go{background:#7c3aed;color:#fff}
+.btn-go:hover:not(:disabled){background:#6d28d9}
+.btn-stop{background:#991b1b;color:#fff}
+.btn-stop:hover:not(:disabled){background:#7f1d1d}
+.bsm{padding:.2rem .5rem;font-size:.7rem;border:1px solid #2d3150;border-radius:4px;background:transparent;color:#64748b;cursor:pointer}
+.bsm:hover{background:#1f2937;color:#94a3b8}
 
-/* Toggle */
-.toggle-row {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.45rem 0; border-bottom: 1px solid #2d3150;
-}
-.toggle-row:last-child { border-bottom: none; }
-.toggle-label { font-size: 0.83rem; color: #cbd5e1; }
-.toggle-desc  { font-size: 0.72rem; color: #475569; margin-top: 0.1rem; }
-.switch { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
-.switch input { opacity: 0; width: 0; height: 0; }
-.slider {
-  position: absolute; inset: 0; background: #334155;
-  border-radius: 20px; cursor: pointer; transition: background 0.2s;
-}
-.slider::before {
-  content: ''; position: absolute; width: 14px; height: 14px;
-  left: 3px; top: 3px; background: white; border-radius: 50%;
-  transition: transform 0.2s;
-}
-input:checked + .slider { background: #7c3aed; }
-input:checked + .slider::before { transform: translateX(16px); }
+/* status */
+.sbar{display:flex;align-items:center;gap:.45rem;padding:.5rem .65rem;background:#0f1117;border:1px solid #2d3150;border-radius:6px;font-size:.78rem}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot.idle{background:#334155}
+.dot.run{background:#f59e0b;animation:pulse 1s infinite}
+.dot.done{background:#10b981}
+.dot.err{background:#ef4444}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-/* Buttons */
-.btn {
-  width: 100%; padding: 0.6rem 1rem; border: none; border-radius: 8px;
-  font-size: 0.88rem; font-weight: 600; cursor: pointer;
-  transition: opacity 0.15s, transform 0.1s;
-}
-.btn:active { transform: scale(0.98); }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-.btn-primary { background: #7c3aed; color: white; }
-.btn-primary:hover:not(:disabled) { background: #6d28d9; }
-.btn-danger  { background: #991b1b; color: white; }
-.btn-danger:hover:not(:disabled)  { background: #7f1d1d; }
+/* ── right panel ── */
+.rpanel{display:flex;flex-direction:column;overflow:hidden;background:#0a0c14}
 
-.btn-sm {
-  padding: 0.22rem 0.55rem; font-size: 0.72rem;
-  border: 1px solid #2d3150; border-radius: 4px;
-  background: transparent; color: #64748b; cursor: pointer;
-}
-.btn-sm:hover { background: #1f2937; color: #94a3b8; }
+/* tabs */
+.tabs{background:#111827;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:0;flex-shrink:0}
+.tab{padding:.5rem 1.1rem;font-size:.78rem;color:#6b7280;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;user-select:none}
+.tab:hover{color:#9ca3af}
+.tab.active{color:#a78bfa;border-bottom-color:#7c3aed}
+.tab-actions{margin-left:auto;padding:0 .75rem;display:flex;gap:.4rem;align-items:center}
 
-/* Status */
-.status-bar {
-  display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.55rem 0.7rem; background: #0f1117;
-  border: 1px solid #2d3150; border-radius: 6px; font-size: 0.8rem;
-}
-.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.dot.idle    { background: #334155; }
-.dot.running { background: #f59e0b; animation: pulse 1s infinite; }
-.dot.done    { background: #10b981; }
-.dot.error   { background: #ef4444; }
-@keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
+/* terminal */
+.terminal{flex:1;overflow-y:auto;padding:.9rem 1.1rem;font-family:'JetBrains Mono','Fira Code',monospace;font-size:.77rem;line-height:1.65;color:#d1d5db}
+.ll{white-space:pre-wrap;word-break:break-all}
+.ll.info{color:#d1d5db}.ll.phase{color:#a78bfa;font-weight:600}.ll.ok{color:#34d399}
+.ll.warn{color:#fbbf24}.ll.err2{color:#f87171}.ll.agent{color:#7dd3fc}
+.ll.think{color:#6366f1;font-style:italic}.ll.saved{color:#86efac}
 
-/* ── Right: terminal ── */
-.terminal-wrap { display: flex; flex-direction: column; overflow: hidden; background: #0a0c14; }
-.terminal-header {
-  background: #111827; border-bottom: 1px solid #1f2937;
-  padding: 0.5rem 1rem; display: flex; align-items: center;
-  justify-content: space-between; flex-shrink: 0;
-}
-.terminal-title { font-size: 0.75rem; color: #6b7280; font-family: monospace; }
-.terminal {
-  flex: 1; overflow-y: auto; padding: 1rem 1.25rem;
-  font-family: 'JetBrains Mono','Fira Code',monospace;
-  font-size: 0.78rem; line-height: 1.6; color: #d1d5db;
-}
-.log-line { white-space: pre-wrap; word-break: break-all; }
-.log-line.info  { color: #d1d5db; }
-.log-line.phase { color: #a78bfa; font-weight: 600; }
-.log-line.ok    { color: #34d399; }
-.log-line.warn  { color: #fbbf24; }
-.log-line.error { color: #f87171; }
-.log-line.agent { color: #7dd3fc; }
-.log-line.think { color: #6366f1; font-style: italic; }
-.log-line.saved { color: #86efac; }
+/* file explorer */
+.explorer{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.exp-toolbar{background:#111827;border-bottom:1px solid #1f2937;padding:.45rem .9rem;display:flex;align-items:center;gap:.5rem;flex-shrink:0}
+.exp-path{flex:1;background:#0f1117;border:1px solid #2d3150;border-radius:5px;color:#94a3b8;font-family:monospace;font-size:.76rem;padding:.3rem .6rem;outline:none}
+.exp-path:focus{border-color:#7c3aed}
+.exp-nav{background:#1e2235;border:1px solid #2d3150;border-radius:5px;color:#94a3b8;cursor:pointer;padding:.28rem .55rem;font-size:.85rem}
+.exp-nav:hover{background:#2d3150;color:#e2e8f0}
 
-/* Results */
-.results {
-  border-top: 1px solid #1f2937; padding: 1rem 1.25rem;
-  background: #0f1117; flex-shrink: 0; max-height: 160px;
-  overflow-y: auto; display: none;
-}
-.results.visible { display: block; }
-.results h3 { font-size: 0.72rem; color: #64748b; text-transform: uppercase;
-              letter-spacing: 0.06em; margin-bottom: 0.6rem; }
-.result-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(170px,1fr)); gap: 0.45rem; }
-.result-card {
-  background: #1a1d2e; border: 1px solid #2d3150;
-  border-radius: 6px; padding: 0.55rem 0.7rem;
-}
-.rc-label { font-size: 0.68rem; color: #64748b; }
-.rc-value { font-size: 0.92rem; font-weight: 600; color: #e2e8f0; }
-.rc-sub   { font-size: 0.68rem; color: #94a3b8; margin-top: 0.1rem; }
+.exp-cols{display:flex;overflow:hidden;flex:1}
 
-/* ── File browser modal ── */
-.modal-overlay {
-  display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.7); z-index: 100;
-  align-items: center; justify-content: center;
-}
-.modal-overlay.open { display: flex; }
-.modal {
-  background: #1a1d2e; border: 1px solid #2d3150; border-radius: 10px;
-  width: 560px; max-height: 70vh; display: flex; flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-}
-.modal-header {
-  padding: 0.9rem 1.1rem; border-bottom: 1px solid #2d3150;
-  display: flex; align-items: center; justify-content: space-between;
-}
-.modal-header h2 { font-size: 0.95rem; color: #e2e8f0; }
-.modal-close { background: none; border: none; color: #64748b;
-               font-size: 1.2rem; cursor: pointer; }
-.modal-close:hover { color: #e2e8f0; }
-.modal-path {
-  padding: 0.5rem 1rem; background: #0f1117;
-  font-family: monospace; font-size: 0.78rem; color: #94a3b8;
-  border-bottom: 1px solid #1f2937; display: flex; align-items: center; gap: 0.5rem;
-}
-.modal-path span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-list { flex: 1; overflow-y: auto; }
-.file-item {
-  display: flex; align-items: center; gap: 0.6rem;
-  padding: 0.45rem 1rem; cursor: pointer;
-  border-bottom: 1px solid #111827; font-size: 0.82rem;
-  transition: background 0.1s;
-}
-.file-item:hover { background: #111827; }
-.file-item:last-child { border-bottom: none; }
-.file-item.is-dir { color: #7dd3fc; }
-.file-item.is-file { color: #d1d5db; }
-.file-icon { width: 1.2rem; text-align: center; flex-shrink: 0; }
-.file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-size { font-size: 0.7rem; color: #475569; flex-shrink: 0; }
-.modal-footer {
-  padding: 0.7rem 1rem; border-top: 1px solid #2d3150;
-  display: flex; align-items: center; gap: 0.5rem;
-}
-.modal-footer input { flex: 1; }
-.modal-select-btn {
-  background: #7c3aed; color: white; border: none; border-radius: 6px;
-  padding: 0.45rem 1rem; font-size: 0.85rem; font-weight: 600; cursor: pointer;
-}
-.modal-select-btn:hover { background: #6d28d9; }
+/* tree (left) */
+.tree-pane{width:220px;border-right:1px solid #1f2937;overflow-y:auto;background:#0d0f1a;flex-shrink:0}
+.tree-item{display:flex;align-items:center;gap:.35rem;padding:.32rem .6rem;cursor:pointer;font-size:.78rem;color:#94a3b8;transition:background .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree-item:hover{background:#111827;color:#e2e8f0}
+.tree-item.active{background:#1e1b4b;color:#a78bfa}
+.tree-indent{display:inline-block;width:1rem;flex-shrink:0}
+
+/* files (right) */
+.files-pane{flex:1;overflow-y:auto;background:#0a0c14}
+.files-header{display:grid;grid-template-columns:1fr 80px 90px;padding:.3rem .9rem;font-size:.68rem;color:#475569;border-bottom:1px solid #1a1d2e;text-transform:uppercase;letter-spacing:.05em}
+.frow{display:grid;grid-template-columns:1fr 80px 90px;padding:.38rem .9rem;font-size:.8rem;border-bottom:1px solid #111827;cursor:pointer;transition:background .1s;align-items:center}
+.frow:hover{background:#111827}
+.frow.selected{background:#1e1b4b}
+.fname{display:flex;align-items:center;gap:.45rem;overflow:hidden}
+.fname span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fsize{color:#64748b;font-size:.73rem;text-align:right}
+.fext{color:#475569;font-size:.7rem}
+.ficon{flex-shrink:0;font-size:.95rem}
+
+/* preview bar */
+.preview-bar{border-top:1px solid #1f2937;background:#0d0f1a;padding:.55rem .9rem;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;min-height:44px}
+.prev-info{font-size:.78rem;color:#94a3b8}
+.prev-name{color:#e2e8f0;font-weight:600;margin-right:.5rem}
+.prev-actions{display:flex;gap:.4rem}
+.prev-btn{background:#1e2235;border:1px solid #2d3150;border-radius:5px;color:#94a3b8;cursor:pointer;padding:.28rem .7rem;font-size:.76rem;transition:background .15s}
+.prev-btn:hover{background:#2d3150;color:#e2e8f0}
+.prev-btn.dl{background:#1e3a5f;border-color:#0369a1;color:#7dd3fc}
+.prev-btn.dl:hover{background:#1e4976}
+
+/* results strip */
+.rstrip{border-top:1px solid #1f2937;padding:.75rem 1rem;background:#0f1117;flex-shrink:0;display:none}
+.rstrip.on{display:block}
+.rstrip h3{font-size:.68rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem}
+.rgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:.4rem}
+.rcard{background:#1a1d2e;border:1px solid #2d3150;border-radius:6px;padding:.5rem .65rem}
+.rlbl{font-size:.66rem;color:#64748b}
+.rval{font-size:.9rem;font-weight:600;color:#e2e8f0}
+
+/* modal */
+.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center}
+.ov.open{display:flex}
+.modal{background:#1a1d2e;border:1px solid #2d3150;border-radius:10px;width:540px;max-height:68vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.mhd{padding:.8rem 1rem;border-bottom:1px solid #2d3150;display:flex;align-items:center;justify-content:space-between}
+.mhd h2{font-size:.9rem;color:#e2e8f0}
+.mcl{background:none;border:none;color:#64748b;font-size:1.1rem;cursor:pointer}
+.mcl:hover{color:#e2e8f0}
+.mpath{padding:.4rem .9rem;background:#0f1117;font-family:monospace;font-size:.75rem;color:#94a3b8;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:.4rem}
+.mpath span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mlist{flex:1;overflow-y:auto}
+.mitem{display:flex;align-items:center;gap:.5rem;padding:.38rem .9rem;cursor:pointer;border-bottom:1px solid #111827;font-size:.8rem;transition:background .1s}
+.mitem:hover{background:#111827}
+.mitem.dir{color:#7dd3fc}.mitem.file{color:#d1d5db}
+.mft{padding:.6rem .9rem;border-top:1px solid #2d3150;display:flex;gap:.4rem}
+.mft input{flex:1}
+.mok{background:#7c3aed;color:#fff;border:none;border-radius:6px;padding:.4rem .9rem;font-size:.83rem;font-weight:600;cursor:pointer}
+.mok:hover{background:#6d28d9}
 </style>
 </head>
 <body>
@@ -394,329 +298,492 @@ input:checked + .slider::before { transform: translateX(16px); }
   <h1>🔍 Disk Recovery AI</h1>
   <span class="badge badge-ai">Claude Opus 4.8</span>
   <span class="badge badge-apfs">APFS</span>
-  <span style="margin-left:auto;font-size:.8rem;color:#475569">Multi-agent systém obnovy dát</span>
+  <span style="margin-left:auto;font-size:.77rem;color:#475569">Multi-agent systém obnovy dát</span>
 </header>
 
 <main>
-<!-- ── Left panel ── -->
-<div class="panel">
+<!-- ══ LEFT PANEL ══ -->
+<div class="lpanel">
 
   <div>
-    <div class="section-title">Fyzické disky a obrazy</div>
-    <div class="disk-list" id="diskList">
-      <div class="disk-item"><span style="color:#475569;font-size:.8rem;padding:.3rem">Načítavam disky…</span></div>
+    <div class="sec">Pripojené disky a obrazy</div>
+    <div class="dlist" id="diskList">
+      <div class="ditem"><span style="color:#475569;font-size:.78rem">Načítavam…</span></div>
     </div>
-    <div class="disk-refresh">
-      <button class="btn-sm" onclick="loadDisks()">↻ Obnoviť</button>
+    <div style="display:flex;justify-content:flex-end;margin-top:.28rem">
+      <button class="bsm" onclick="loadDisks()">↻ Obnoviť</button>
     </div>
     <div style="margin-top:.5rem">
       <label>Alebo zadaj cestu ručne</label>
-      <div class="input-row">
+      <div class="irow">
         <input type="text" id="device" placeholder="/dev/sdb  alebo  disk.img">
-        <button class="icon-btn" onclick="openBrowser('device')" title="Prehľadávať">📂</button>
+        <button class="ibtn" onclick="openModal('device')" title="Prehľadávať">📂</button>
       </div>
     </div>
   </div>
 
   <div>
     <label>Výstupný adresár</label>
-    <div class="input-row">
+    <div class="irow">
       <input type="text" id="output" value="./recovered">
-      <button class="icon-btn" onclick="openBrowser('output')" title="Prehľadávať">📂</button>
+      <button class="ibtn" onclick="openModal('output')" title="Prehľadávať">📂</button>
     </div>
   </div>
 
   <div>
-    <label>Maximálny rozsah skenu (prázdne = celý disk)</label>
+    <label>Max. rozsah skenu (prázdne = celý disk)</label>
     <input type="text" id="maxScan" placeholder="napr. 500M, 2G">
   </div>
 
   <div>
-    <div class="section-title">Možnosti</div>
-    <div class="toggle-row">
-      <div>
-        <div class="toggle-label">Dry-run</div>
-        <div class="toggle-desc">Len analýza, žiadna fyzická obnova</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="dryRun" checked><span class="slider"></span></label>
+    <div class="sec">Možnosti</div>
+    <div class="trow">
+      <div><div class="tlbl">Dry-run</div><div class="tdsc">Len analýza, bez fyzickej obnovy</div></div>
+      <label class="sw"><input type="checkbox" id="dryRun" checked><span class="sl"></span></label>
     </div>
-    <div class="toggle-row">
-      <div>
-        <div class="toggle-label">Preskočiť skenovanie</div>
-        <div class="toggle-desc">Načítať existujúci scan JSON</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="skipScan" onchange="toggleLoadScan()"><span class="slider"></span></label>
+    <div class="trow">
+      <div><div class="tlbl">Preskočiť skenovanie</div><div class="tdsc">Načítať existujúci scan JSON</div></div>
+      <label class="sw"><input type="checkbox" id="skipScan" onchange="toggleLoadScan()"><span class="sl"></span></label>
     </div>
-    <div id="loadScanRow" style="display:none;padding-top:.5rem">
-      <div class="input-row">
+    <div id="loadScanRow" style="display:none;padding-top:.45rem">
+      <div class="irow">
         <input type="text" id="loadScan" placeholder="./recovered/scan_*.json">
-        <button class="icon-btn" onclick="openBrowser('loadScan')" title="Prehľadávať">📂</button>
+        <button class="ibtn" onclick="openModal('loadScan')">📂</button>
       </div>
     </div>
   </div>
 
   <div>
-    <div class="section-title">Stav</div>
-    <div class="status-bar">
-      <div class="dot idle" id="statusDot"></div>
-      <span id="statusText">Pripravený</span>
+    <div class="sec">Stav</div>
+    <div class="sbar">
+      <div class="dot idle" id="sDot"></div>
+      <span id="sTxt">Pripravený</span>
     </div>
   </div>
 
-  <button class="btn btn-primary" id="startBtn" onclick="startRecovery()">▶ Spustiť obnovu</button>
-  <button class="btn btn-danger"  id="stopBtn"  onclick="stopRecovery()" disabled>■ Zastaviť</button>
+  <button class="btn btn-go"   id="startBtn" onclick="startRecovery()">▶ Spustiť obnovu</button>
+  <button class="btn btn-stop" id="stopBtn"  onclick="stopRecovery()" disabled>■ Zastaviť</button>
 </div>
 
-<!-- ── Right panel ── -->
-<div class="terminal-wrap">
-  <div class="terminal-header">
-    <span class="terminal-title">● výstup procesu</span>
-    <button class="btn-sm" onclick="clearTerminal()">Vymazať</button>
+<!-- ══ RIGHT PANEL ══ -->
+<div class="rpanel">
+
+  <!-- tabs -->
+  <div class="tabs">
+    <div class="tab active" id="tabTerminal" onclick="switchTab('terminal')">⌨ Terminál</div>
+    <div class="tab"        id="tabFiles"    onclick="switchTab('files')">🗂 Súbory</div>
+    <div class="tab-actions">
+      <button class="bsm" id="clearBtn" onclick="clearTerminal()">Vymazať</button>
+      <button class="bsm" id="refreshBtn" onclick="refreshExplorer()" style="display:none">↻ Obnoviť</button>
+    </div>
   </div>
-  <div class="terminal" id="terminal">
-    <div class="log-line info">Vitaj v Disk Recovery AI systéme.</div>
-    <div class="log-line info">Vyber disk zo zoznamu vľavo a klikni ▶ Spustiť obnovu.</div>
+
+  <!-- terminal view -->
+  <div id="viewTerminal" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+    <div class="terminal" id="terminal">
+      <div class="ll info">Vitaj v Disk Recovery AI systéme.</div>
+      <div class="ll info">Vyber disk vľavo a klikni ▶ Spustiť obnovu.</div>
+    </div>
+    <div class="rstrip" id="rstrip">
+      <h3>Výsledky</h3>
+      <div class="rgrid" id="rgrid"></div>
+    </div>
   </div>
-  <div class="results" id="resultsPanel">
-    <h3>Výsledky</h3>
-    <div class="result-grid" id="resultGrid"></div>
+
+  <!-- file explorer view -->
+  <div id="viewFiles" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+    <div class="explorer">
+      <div class="exp-toolbar">
+        <button class="exp-nav" onclick="expUp()" title="Hore">↑</button>
+        <button class="exp-nav" onclick="expHome()" title="Domov">⌂</button>
+        <input class="exp-path" id="expPath" value="./recovered"
+               onkeydown="if(event.key==='Enter') expNavigate(this.value)">
+        <button class="exp-nav" onclick="expNavigate(document.getElementById('expPath').value)">→</button>
+        <button class="exp-nav" onclick="expOutputDir()" title="Prejsť do výstupného adresára">🎯</button>
+      </div>
+      <div class="exp-cols">
+        <!-- tree -->
+        <div class="tree-pane" id="treePane"></div>
+        <!-- file list -->
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div class="files-header">
+            <div>Názov</div><div style="text-align:right">Veľkosť</div><div>Typ</div>
+          </div>
+          <div class="files-pane" id="filesPane"></div>
+        </div>
+      </div>
+      <div class="preview-bar" id="previewBar">
+        <span class="prev-info" id="prevInfo">Vyber súbor…</span>
+        <div class="prev-actions" id="prevActions"></div>
+      </div>
+    </div>
   </div>
+
 </div>
 </main>
 
-<!-- ── File browser modal ── -->
-<div class="modal-overlay" id="modalOverlay" onclick="closeModalOutside(event)">
+<!-- ── File picker modal ── -->
+<div class="ov" id="ov" onclick="ovOutside(event)">
   <div class="modal">
-    <div class="modal-header">
-      <h2 id="modalTitle">Prehľadávať</h2>
-      <button class="modal-close" onclick="closeModal()">✕</button>
+    <div class="mhd">
+      <h2 id="mTitle">Prehľadávať</h2>
+      <button class="mcl" onclick="closeModal()">✕</button>
     </div>
-    <div class="modal-path">
-      <button class="icon-btn" style="padding:0 .4rem;font-size:.85rem" onclick="navParent()">↑</button>
-      <span id="modalCurrentPath">/</span>
+    <div class="mpath">
+      <button class="exp-nav" style="padding:.2rem .45rem;font-size:.8rem" onclick="mNavUp()">↑</button>
+      <span id="mCurPath">/</span>
     </div>
-    <div class="file-list" id="fileList"></div>
-    <div class="modal-footer">
-      <input type="text" id="modalSelected" placeholder="vybraná cesta">
-      <button class="modal-select-btn" onclick="confirmSelect()">Vybrať</button>
+    <div class="mlist" id="mList"></div>
+    <div class="mft">
+      <input type="text" id="mSel" placeholder="vybraná cesta">
+      <button class="mok" onclick="confirmModal()">Vybrať</button>
     </div>
   </div>
 </div>
 
 <script>
-// ── State ──────────────────────────────────────────────────────────────────
-let evtSource = null;
-let running   = false;
-let modalTarget = null;   // which input to fill: 'device' | 'output' | 'loadScan'
-let currentBrowsePath = '';
+// ═══════════════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════════════
+let evtSrc   = null;
+let running  = false;
+let mTarget  = null;
+let expCurrent = '';
+let selectedFile = null;
+let activeTab = 'terminal';
 
-// ── Disk list ──────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  TABS
+// ═══════════════════════════════════════════════════════════════
+function switchTab(t) {
+  activeTab = t;
+  document.getElementById('tabTerminal').classList.toggle('active', t==='terminal');
+  document.getElementById('tabFiles').classList.toggle('active',    t==='files');
+  document.getElementById('viewTerminal').style.display = t==='terminal' ? 'flex' : 'none';
+  document.getElementById('viewFiles').style.display    = t==='files'    ? 'flex' : 'none';
+  document.getElementById('clearBtn').style.display    = t==='terminal' ? ''      : 'none';
+  document.getElementById('refreshBtn').style.display  = t==='files'    ? ''      : 'none';
+  if (t === 'files') expNavigate(expCurrent || document.getElementById('output').value || '.');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DISK LIST
+// ═══════════════════════════════════════════════════════════════
 async function loadDisks() {
   const list = document.getElementById('diskList');
-  list.innerHTML = '<div class="disk-item"><span style="color:#475569;font-size:.8rem;padding:.3rem">Načítavam…</span></div>';
+  list.innerHTML = '<div class="ditem"><span style="color:#475569;font-size:.78rem">Načítavam…</span></div>';
   try {
-    const res = await fetch('/disks');
-    const disks = await res.json();
+    const disks = await fetch('/disks').then(r=>r.json());
     if (!disks.length) {
-      list.innerHTML = '<div class="disk-item"><span style="color:#475569;font-size:.8rem;padding:.3rem">Žiadne disky nenájdené</span></div>';
+      list.innerHTML = '<div class="ditem"><span style="color:#475569;font-size:.78rem">Žiadne disky nenájdené</span></div>';
       return;
     }
     list.innerHTML = '';
     disks.forEach(d => {
-      const div = document.createElement('div');
-      div.className = 'disk-item';
-      div.onclick = () => selectDisk(d.path, div);
-      const icon = d.type === 'disk' ? '💾' : '📄';
-      div.innerHTML = `
-        <span class="disk-icon">${icon}</span>
-        <div class="disk-info">
-          <div class="disk-path">${d.path}</div>
-          <div class="disk-meta">${d.label.replace(d.path,'').trim()}</div>
-        </div>
-        <span class="disk-size">${d.size}</span>`;
-      list.appendChild(div);
+      const el = document.createElement('div');
+      el.className = 'ditem';
+      el.onclick = () => { document.querySelectorAll('.ditem').forEach(x=>x.classList.remove('sel')); el.classList.add('sel'); document.getElementById('device').value = d.path; };
+      const ic = d.type==='disk' ? '💾' : '📄';
+      el.innerHTML = `<span>${ic}</span><div style="flex:1;overflow:hidden"><div class="dpath">${d.path}</div><div class="dmeta">${d.label.replace(d.path,'').trim()}</div></div><span class="dsize">${d.size}</span>`;
+      list.appendChild(el);
     });
-  } catch(e) {
-    list.innerHTML = '<div class="disk-item"><span style="color:#f87171;font-size:.8rem;padding:.3rem">Chyba načítania diskov</span></div>';
-  }
+  } catch { list.innerHTML = '<div class="ditem"><span style="color:#f87171;font-size:.78rem">Chyba načítania</span></div>'; }
 }
 
-function selectDisk(path, el) {
-  document.querySelectorAll('.disk-item').forEach(d => d.classList.remove('selected'));
-  el.classList.add('selected');
-  document.getElementById('device').value = path;
+// ═══════════════════════════════════════════════════════════════
+//  FILE EXPLORER
+// ═══════════════════════════════════════════════════════════════
+const EXT_ICONS = {
+  '.jpg':'.jpeg':'.png':'.gif':'.bmp':'.webp': '🖼',
+  '.pdf': '📕', '.txt':'.log':'.md': '📄',
+  '.zip':'.gz':'.7z':'.tar':'.bz2': '🗜',
+  '.mp4':'.mkv':'.avi':'.mov': '🎬',
+  '.mp3':'.flac':'.wav':'.aac': '🎵',
+  '.db':'.sqlite': '🗃',
+  '.json': '📋',
+  '.img':'.iso': '💽',
+  '.sh':'.py':'.js':'.ts': '⚙',
+};
+// simpler lookup
+function extIcon(ext) {
+  const map = {'🖼':['.jpg','.jpeg','.png','.gif','.bmp','.webp'],
+               '📕':['.pdf'],'📄':['.txt','.log','.md','.csv'],
+               '🗜':['.zip','.gz','.7z','.tar','.bz2'],
+               '🎬':['.mp4','.mkv','.avi','.mov'],
+               '🎵':['.mp3','.flac','.wav','.aac'],
+               '🗃':['.db','.sqlite'],'📋':['.json'],
+               '💽':['.img','.iso'],'⚙':['.sh','.py','.js','.ts']};
+  for (const [ic, exts] of Object.entries(map)) if (exts.includes(ext)) return ic;
+  return '📄';
 }
 
-// ── File browser ───────────────────────────────────────────────────────────
-async function openBrowser(target) {
-  modalTarget = target;
-  const titles = { device: 'Vybrať disk / image', output: 'Výstupný adresár', loadScan: 'Scan JSON súbor' };
-  document.getElementById('modalTitle').textContent = titles[target] || 'Prehľadávať';
-
-  const startPath = document.getElementById(target)?.value.trim() || '.';
-  await browseTo(startPath);
-  document.getElementById('modalOverlay').classList.add('open');
-}
-
-function closeModal() {
-  document.getElementById('modalOverlay').classList.remove('open');
-}
-function closeModalOutside(e) {
-  if (e.target === document.getElementById('modalOverlay')) closeModal();
-}
-
-async function browseTo(path) {
+async function expNavigate(path) {
+  if (!path) return;
   try {
-    const res = await fetch('/browse?path=' + encodeURIComponent(path));
-    const data = await res.json();
-    currentBrowsePath = data.current;
-    document.getElementById('modalCurrentPath').textContent = data.current;
-    document.getElementById('modalSelected').value = data.current;
+    const data = await fetch('/browse?path=' + encodeURIComponent(path)).then(r=>r.json());
+    expCurrent = data.current;
+    document.getElementById('expPath').value = data.current;
+    renderTree(data);
+    renderFiles(data);
+    clearPreview();
+  } catch(e) { console.error(e); }
+}
 
-    const fl = document.getElementById('fileList');
-    fl.innerHTML = '';
+function expUp()       { if (expCurrent) expNavigate(expCurrent + '/..'); }
+function expHome()     { expNavigate('~'); }
+function expOutputDir(){ expNavigate(document.getElementById('output').value || '.'); }
+function refreshExplorer() { expNavigate(expCurrent || '.'); }
 
-    // Parent ".."
-    if (data.parent) {
-      const row = document.createElement('div');
-      row.className = 'file-item is-dir';
-      row.onclick = () => browseTo(data.parent);
-      row.innerHTML = '<span class="file-icon">📁</span><span class="file-name">..</span>';
-      fl.appendChild(row);
-    }
+function renderTree(data) {
+  const pane = document.getElementById('treePane');
+  pane.innerHTML = '';
 
-    data.entries.forEach(e => {
-      const row = document.createElement('div');
-      row.className = 'file-item ' + (e.is_dir ? 'is-dir' : 'is-file');
-      row.onclick = () => {
-        if (e.is_dir) {
-          browseTo(e.path);
-        } else {
-          document.getElementById('modalSelected').value = e.path;
-        }
-      };
-      const icon = e.is_dir ? '📁' : (e.name.endsWith('.img') ? '💽' : (e.name.endsWith('.json') ? '📋' : '📄'));
-      row.innerHTML = `<span class="file-icon">${icon}</span>
-        <span class="file-name">${e.name}</span>
-        <span class="file-size">${e.size}</span>`;
-      fl.appendChild(row);
-    });
-  } catch(err) {
-    console.error(err);
+  // Breadcrumb as tree items
+  const parts = data.current.split('/').filter(Boolean);
+  let built = '/';
+  const root = document.createElement('div');
+  root.className = 'tree-item' + (data.current==='/' ? ' active' : '');
+  root.innerHTML = '<span>📁</span> /';
+  root.onclick = () => expNavigate('/');
+  pane.appendChild(root);
+
+  parts.forEach((p, i) => {
+    built += (i === 0 ? '' : '/') + p;
+    const bpath = built;
+    const el = document.createElement('div');
+    el.className = 'tree-item' + (i === parts.length-1 ? ' active' : '');
+    el.innerHTML = `<span class="tree-indent" style="width:${(i+1)*12}px"></span><span>📁</span> ${p}`;
+    el.onclick = () => expNavigate(bpath);
+    pane.appendChild(el);
+  });
+
+  // Quick-access dirs from entries
+  data.entries.filter(e=>e.is_dir).slice(0,30).forEach(e => {
+    const el = document.createElement('div');
+    el.className = 'tree-item';
+    el.innerHTML = `<span class="tree-indent" style="width:${(parts.length+1)*12}px"></span><span>📁</span> ${e.name}`;
+    el.onclick = () => expNavigate(e.path);
+    pane.appendChild(el);
+  });
+}
+
+function renderFiles(data) {
+  const pane = document.getElementById('filesPane');
+  pane.innerHTML = '';
+
+  // Parent row
+  if (data.parent) {
+    const row = document.createElement('div');
+    row.className = 'frow';
+    row.onclick = () => expNavigate(data.parent);
+    row.innerHTML = `<div class="fname"><span class="ficon">📁</span><span style="color:#7dd3fc">..</span></div><div class="fsize"></div><div class="fext">adresár</div>`;
+    pane.appendChild(row);
+  }
+
+  data.entries.forEach(e => {
+    const row = document.createElement('div');
+    row.className = 'frow';
+    row.onclick = () => {
+      document.querySelectorAll('.frow').forEach(r=>r.classList.remove('selected'));
+      row.classList.add('selected');
+      if (e.is_dir) { expNavigate(e.path); }
+      else          { showPreview(e); }
+    };
+    const ic = e.is_dir ? '📁' : extIcon(e.ext);
+    const col = e.is_dir ? '#7dd3fc' : '#d1d5db';
+    row.innerHTML = `
+      <div class="fname"><span class="ficon">${ic}</span><span style="color:${col}">${e.name}</span></div>
+      <div class="fsize">${e.size}</div>
+      <div class="fext">${e.is_dir ? 'adresár' : (e.ext||'súbor')}</div>`;
+    pane.appendChild(row);
+  });
+
+  if (!data.entries.length && !data.parent) {
+    pane.innerHTML = '<div style="padding:2rem;color:#475569;font-size:.82rem;text-align:center">Prázdny adresár</div>';
   }
 }
 
-function navParent() {
-  const cur = document.getElementById('modalCurrentPath').textContent;
-  fetch('/browse?path=' + encodeURIComponent(cur))
-    .then(r => r.json())
-    .then(d => { if (d.parent) browseTo(d.parent); });
+function clearPreview() {
+  selectedFile = null;
+  document.getElementById('prevInfo').innerHTML    = '<span style="color:#475569">Vyber súbor…</span>';
+  document.getElementById('prevActions').innerHTML = '';
 }
 
-function confirmSelect() {
-  const val = document.getElementById('modalSelected').value.trim();
-  if (modalTarget && val) document.getElementById(modalTarget).value = val;
+function showPreview(e) {
+  selectedFile = e;
+  document.getElementById('prevInfo').innerHTML =
+    `<span class="prev-name">${e.name}</span><span style="color:#64748b">${e.size}</span>`;
+
+  const acts = document.getElementById('prevActions');
+  acts.innerHTML = '';
+
+  // Download button always
+  const dl = document.createElement('button');
+  dl.className = 'prev-btn dl';
+  dl.textContent = '⬇ Stiahnuť';
+  dl.onclick = () => window.open('/download?path=' + encodeURIComponent(e.path));
+  acts.appendChild(dl);
+
+  // Open in new tab for previewable types
+  const previewable = ['.jpg','.jpeg','.png','.gif','.bmp','.webp','.pdf','.txt','.log','.json','.md','.csv'];
+  if (previewable.includes(e.ext)) {
+    const pv = document.createElement('button');
+    pv.className = 'prev-btn';
+    pv.textContent = '👁 Zobraziť';
+    pv.onclick = () => window.open('/preview?path=' + encodeURIComponent(e.path), '_blank');
+    acts.appendChild(pv);
+  }
+
+  // Copy path
+  const cp = document.createElement('button');
+  cp.className = 'prev-btn';
+  cp.textContent = '📋 Kopírovať cestu';
+  cp.onclick = () => { navigator.clipboard.writeText(e.path); cp.textContent='✓ Skopírované'; setTimeout(()=>cp.textContent='📋 Kopírovať cestu',1500); };
+  acts.appendChild(cp);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FILE PICKER MODAL
+// ═══════════════════════════════════════════════════════════════
+async function openModal(target) {
+  mTarget = target;
+  const titles = {device:'Vybrať disk / image', output:'Výstupný adresár', loadScan:'Scan JSON'};
+  document.getElementById('mTitle').textContent = titles[target] || 'Prehľadávať';
+  const start = document.getElementById(target)?.value.trim() || '.';
+  await mBrowse(start);
+  document.getElementById('ov').classList.add('open');
+}
+function closeModal() { document.getElementById('ov').classList.remove('open'); }
+function ovOutside(e) { if (e.target===document.getElementById('ov')) closeModal(); }
+
+async function mBrowse(path) {
+  const data = await fetch('/browse?path='+encodeURIComponent(path)).then(r=>r.json());
+  document.getElementById('mCurPath').textContent = data.current;
+  document.getElementById('mSel').value = data.current;
+  const list = document.getElementById('mList');
+  list.innerHTML = '';
+  if (data.parent) {
+    const r = document.createElement('div');
+    r.className='mitem dir'; r.onclick=()=>mBrowse(data.parent);
+    r.innerHTML='<span>📁</span> ..'; list.appendChild(r);
+  }
+  data.entries.forEach(e=>{
+    const r = document.createElement('div');
+    r.className='mitem '+(e.is_dir?'dir':'file');
+    r.onclick=()=>{ if(e.is_dir) mBrowse(e.path); else document.getElementById('mSel').value=e.path; };
+    const ic = e.is_dir?'📁':extIcon(e.ext);
+    r.innerHTML=`<span>${ic}</span> ${e.name} <span style="margin-left:auto;color:#475569;font-size:.7rem">${e.size}</span>`;
+    list.appendChild(r);
+  });
+}
+function mNavUp() {
+  const cur = document.getElementById('mCurPath').textContent;
+  fetch('/browse?path='+encodeURIComponent(cur)).then(r=>r.json()).then(d=>{ if(d.parent) mBrowse(d.parent); });
+}
+function confirmModal() {
+  const v = document.getElementById('mSel').value.trim();
+  if (mTarget && v) document.getElementById(mTarget).value = v;
   closeModal();
 }
 
-// ── Toggles ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  TOGGLES / STATUS
+// ═══════════════════════════════════════════════════════════════
 function toggleLoadScan() {
-  document.getElementById('loadScanRow').style.display =
-    document.getElementById('skipScan').checked ? 'block' : 'none';
+  document.getElementById('loadScanRow').style.display = document.getElementById('skipScan').checked?'block':'none';
+}
+function setStatus(s, t) {
+  document.getElementById('sDot').className = 'dot '+s;
+  document.getElementById('sTxt').textContent = t;
 }
 
-// ── Status ─────────────────────────────────────────────────────────────────
-function setStatus(state, text) {
-  document.getElementById('statusDot').className = 'dot ' + state;
-  document.getElementById('statusText').textContent = text;
-}
-
-// ── Terminal ───────────────────────────────────────────────────────────────
-function appendLine(text, cls = 'info') {
+// ═══════════════════════════════════════════════════════════════
+//  TERMINAL
+// ═══════════════════════════════════════════════════════════════
+function log(txt, cls='info') {
   const t = document.getElementById('terminal');
-  const div = document.createElement('div');
-  div.className = 'log-line ' + cls;
-  div.textContent = text;
-  t.appendChild(div);
-  t.scrollTop = t.scrollHeight;
+  const d = document.createElement('div');
+  d.className='ll '+cls; d.textContent=txt;
+  t.appendChild(d); t.scrollTop=t.scrollHeight;
 }
-function clearTerminal() { document.getElementById('terminal').innerHTML = ''; }
-
-function classifyLine(line) {
-  if (line.startsWith('[Fáza') || line.startsWith('===') || line.startsWith('---')) return 'phase';
-  if (line.includes('[Agent') || line.includes('Agent ')) return 'agent';
-  if (line.includes('thinking') || line.includes('Analyst thinking') ||
-      line.includes('Predictor thinking') || line.includes('Planner thinking')) return 'think';
-  if (line.includes('→ uložené') || line.includes('Hotovo')) return 'saved';
-  if (line.includes('[WARN]') || line.includes('⚠')) return 'warn';
-  if (line.includes('[CHYBA]') || line.includes('Error') || line.includes('error')) return 'error';
-  if (line.startsWith('  →') || line.startsWith('  Hotovo')) return 'ok';
+function clearTerminal() { document.getElementById('terminal').innerHTML=''; }
+function classify(l) {
+  if (l.startsWith('[Fáza')||l.startsWith('===')||l.startsWith('---')) return 'phase';
+  if (l.includes('[Agent')||l.includes('Agent ')) return 'agent';
+  if (l.includes('thinking')||l.includes('Analyst thinking')||l.includes('Predictor')||l.includes('Planner thinking')) return 'think';
+  if (l.includes('→ uložené')||l.includes('Hotovo')) return 'saved';
+  if (l.includes('[WARN]')||l.includes('⚠')) return 'warn';
+  if (l.includes('[CHYBA]')||l.toLowerCase().includes('error')) return 'err2';
+  if (l.startsWith('  →')) return 'ok';
   return 'info';
 }
 
-// ── Recovery ───────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  RECOVERY
+// ═══════════════════════════════════════════════════════════════
 function startRecovery() {
   if (running) return;
   const params = new URLSearchParams({
-    device:    document.getElementById('device').value.trim(),
-    output:    document.getElementById('output').value.trim(),
-    max_scan:  document.getElementById('maxScan').value.trim(),
-    dry_run:   document.getElementById('dryRun').checked ? '1' : '0',
-    load_scan: document.getElementById('skipScan').checked
-                 ? document.getElementById('loadScan').value.trim() : '',
+    device:   document.getElementById('device').value.trim(),
+    output:   document.getElementById('output').value.trim(),
+    max_scan: document.getElementById('maxScan').value.trim(),
+    dry_run:  document.getElementById('dryRun').checked?'1':'0',
+    load_scan:document.getElementById('skipScan').checked ? document.getElementById('loadScan').value.trim():'',
   });
-
   clearTerminal();
-  document.getElementById('resultsPanel').classList.remove('visible');
-  document.getElementById('startBtn').disabled = true;
-  document.getElementById('stopBtn').disabled  = false;
-  setStatus('running', 'Prebieha obnova…');
-  running = true;
+  document.getElementById('rstrip').classList.remove('on');
+  document.getElementById('startBtn').disabled=true;
+  document.getElementById('stopBtn').disabled=false;
+  setStatus('run','Prebieha obnova…');
+  running=true;
+  switchTab('terminal');
 
-  evtSource = new EventSource('/run?' + params);
-
-  evtSource.addEventListener('line',      e => appendLine(e.data, classifyLine(e.data)));
-  evtSource.addEventListener('result',    e => { try { showResults(JSON.parse(e.data)); } catch{} });
-  evtSource.addEventListener('done',      e => finish('done',  e.data || 'Dokončené'));
-  evtSource.addEventListener('error_msg', e => { appendLine('CHYBA: ' + e.data, 'error'); finish('error','Chyba'); });
-  evtSource.onerror = () => { if (running) finish('error', 'Spojenie prerušené'); };
+  evtSrc = new EventSource('/run?'+params);
+  evtSrc.addEventListener('line',      e=>log(e.data, classify(e.data)));
+  evtSrc.addEventListener('result',    e=>{ try{ showResults(JSON.parse(e.data)); }catch{} });
+  evtSrc.addEventListener('done',      e=>{ finish('done', e.data||'Dokončené'); autoOpenFiles(); });
+  evtSrc.addEventListener('error_msg', e=>{ log('CHYBA: '+e.data,'err2'); finish('err','Chyba'); });
+  evtSrc.onerror = ()=>{ if(running) finish('err','Spojenie prerušené'); };
 }
 
 function stopRecovery() {
-  if (evtSource) { evtSource.close(); evtSource = null; }
-  fetch('/stop', { method: 'POST' });
-  finish('idle', 'Zastavené');
+  if(evtSrc){evtSrc.close();evtSrc=null;}
+  fetch('/stop',{method:'POST'});
+  finish('idle','Zastavené');
+}
+function finish(s,t) {
+  running=false;
+  if(evtSrc){evtSrc.close();evtSrc=null;}
+  document.getElementById('startBtn').disabled=false;
+  document.getElementById('stopBtn').disabled=true;
+  setStatus(s,t);
 }
 
-function finish(state, text) {
-  running = false;
-  if (evtSource) { evtSource.close(); evtSource = null; }
-  document.getElementById('startBtn').disabled = false;
-  document.getElementById('stopBtn').disabled  = true;
-  setStatus(state, text);
+function autoOpenFiles() {
+  // After recovery completes, pre-load the output dir in explorer
+  const outDir = document.getElementById('output').value.trim() || './recovered';
+  expNavigate(outDir);
 }
 
 function showResults(data) {
-  const grid = document.getElementById('resultGrid');
+  const g = document.getElementById('rgrid');
   const items = [
-    { label: 'Signatúr',       value: data.signatures    ?? '—', sub: 'nájdených' },
-    { label: 'Partícií (AI)',  value: data.partitions    ?? '—', sub: 'odhadovaných' },
-    { label: 'Pred. regiónov', value: data.pred_regions  ?? '—', sub: '' },
-    { label: 'Akcií v pláne',  value: data.actions       ?? '—', sub: '' },
-    { label: 'Odhad obnovy',   value: data.recovery_rate ?? '—', sub: '' },
-    { label: 'Výstup',         value: data.output_dir    ?? '—', sub: '' },
+    {l:'Signatúr',       v:data.signatures   ??'—'},
+    {l:'Partícií (AI)',  v:data.partitions   ??'—'},
+    {l:'Pred. regiónov', v:data.pred_regions ??'—'},
+    {l:'Akcií v pláne',  v:data.actions      ??'—'},
+    {l:'Odhad obnovy',   v:data.recovery_rate??'—'},
+    {l:'Výstup',         v:data.output_dir   ??'—'},
   ];
-  grid.innerHTML = items.map(it => `
-    <div class="result-card">
-      <div class="rc-label">${it.label}</div>
-      <div class="rc-value">${it.value}</div>
-      ${it.sub ? '<div class="rc-sub">'+it.sub+'</div>' : ''}
-    </div>`).join('');
-  document.getElementById('resultsPanel').classList.add('visible');
+  g.innerHTML = items.map(i=>`<div class="rcard"><div class="rlbl">${i.l}</div><div class="rval">${i.v}</div></div>`).join('');
+  document.getElementById('rstrip').classList.add('on');
 }
 
-// ── Init ───────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════
 loadDisks();
+expNavigate(document.getElementById('output').value || '.');
 </script>
 </body>
 </html>
@@ -745,6 +812,26 @@ def browse():
     return jsonify(browse_dir(path))
 
 
+@app.get("/download")
+def download():
+    path = request.args.get("path", "")
+    p = Path(path).expanduser().resolve()
+    if not p.is_file():
+        return "Not found", 404
+    return send_file(str(p), as_attachment=True, download_name=p.name)
+
+
+@app.get("/preview")
+def preview():
+    path = request.args.get("path", "")
+    p = Path(path).expanduser().resolve()
+    if not p.is_file():
+        return "Not found", 404
+    mime, _ = mimetypes.guess_type(str(p))
+    mime = mime or "application/octet-stream"
+    return send_file(str(p), mimetype=mime)
+
+
 @app.get("/run")
 def run():
     global _proc
@@ -762,66 +849,49 @@ def run():
     cmd = [
         sys.executable, "-u",
         str(Path(__file__).parent / "orchestrator.py"),
-        "--device", device,
-        "--output", output,
+        "--device", device, "--output", output,
     ]
-    if max_scan:
-        cmd += ["--max-scan", max_scan]
-    if dry_run:
-        cmd.append("--dry-run")
-    if load_scan:
-        cmd += ["--load-scan", load_scan]
+    if max_scan:  cmd += ["--max-scan", max_scan]
+    if dry_run:   cmd.append("--dry-run")
+    if load_scan: cmd += ["--load-scan", load_scan]
 
     def generate():
         global _proc
         with _lock:
             try:
                 _proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
-                    env=os.environ.copy(),
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, env=os.environ.copy(),
                     cwd=str(Path(__file__).parent),
                 )
             except Exception as e:
                 yield f"event: error_msg\ndata: {e}\n\n"
                 return
 
-        sig_count = part_count = region_count = action_count = 0
-        recovery_rate = ""
-
+        sig_c = part_c = reg_c = act_c = 0
+        rate = ""
         for line in _proc.stdout:
             line = line.rstrip("\n")
             yield f"event: line\ndata: {line}\n\n"
-
             if "nájdených" in line and "signátur" in line:
-                try: sig_count = int([t for t in line.split() if t.isdigit()][0])
-                except Exception: pass
+                try: sig_c = int([t for t in line.split() if t.isdigit()][0])
+                except: pass
             if "partícií" in line.lower() and "AI" in line:
-                try: part_count = int(line.split()[1])
-                except Exception: pass
+                try: part_c = int(line.split()[1])
+                except: pass
             if "Predikované regióny:" in line:
-                try: region_count = int(line.split("regióny:")[1].split(",")[0].strip())
-                except Exception: pass
+                try: reg_c = int(line.split("regióny:")[1].split(",")[0].strip())
+                except: pass
             if "Akcií v pláne:" in line:
-                try: action_count = int(line.split(":")[1].strip())
-                except Exception: pass
+                try: act_c = int(line.split(":")[1].strip())
+                except: pass
             if "Odhadov. obnova:" in line or "Odhadovaná obnova:" in line:
-                recovery_rate = line.split(":", 1)[-1].strip()
+                rate = line.split(":", 1)[-1].strip()
 
         _proc.wait()
-        stats = {
-            "signatures":    sig_count,
-            "partitions":    part_count,
-            "pred_regions":  region_count,
-            "actions":       action_count,
-            "recovery_rate": recovery_rate,
-            "output_dir":    output,
-        }
-        yield f"event: result\ndata: {json.dumps(stats)}\n\n"
+        yield f"event: result\ndata: {json.dumps({'signatures':sig_c,'partitions':part_c,'pred_regions':reg_c,'actions':act_c,'recovery_rate':rate,'output_dir':output})}\n\n"
         rc = _proc.returncode
-        yield f"event: done\ndata: {'Úspešne dokončené ✓' if rc == 0 else f'Ukončené s kódom {rc}'}\n\n"
+        yield f"event: done\ndata: {'Úspešne dokončené ✓' if rc==0 else f'Ukončené s kódom {rc}'}\n\n"
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -835,8 +905,6 @@ def stop():
             _proc.terminate()
     return jsonify({"ok": True})
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
