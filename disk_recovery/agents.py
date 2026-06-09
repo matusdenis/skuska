@@ -78,9 +78,19 @@ Dostaneš raw scan report disku (JSON), kde sú zaznamenané
 všetky nájdené signatúry (magic bytes) jednotlivých súborových
 systémov a typov súborov.
 
+Pre APFS (Apple File System) štruktúry:
+- APFS_NX = NX Container Superblock (NXSB) — koreňový kontajner, obsahuje viacero volumes
+- APFS_VOL = APFS Volume Superblock (APSB) — individuálny volume v rámci kontajnera
+- APFS kontajner obvykle začína na začiatku Apple_APFS GPT partície
+- Jeden kontajner obsahuje systémový volume (role=SYSTEM), dátový volume (role=DATA),
+  Preboot, Recovery a VM volumes
+- FileVault šifrovaný kontajner má incompat_features bit 0x1 (APFS_INCOMPAT_ENCRYPTED)
+- Checkpoint oblasť (xp_desc_base) obsahuje históriu transakcií — dôležité pre obnovu
+- V poškodených prípadoch môžu byť viditeľné iba niektoré volumes alebo žiadne
+
 Tvoja úloha:
 1. Analyzuj polohy signátur a ich kontexty
-2. Identifikuj pravdepodobné partície (ich začiatky, konce, typy FS)
+2. Identifikuj pravdepodobné partície (ich začiatky, konce, typy FS) vrátane APFS
 3. Identifikuj zhluky súborov konkrétnych typov
 4. Vyhodnoť integritu nálezov (môže ísť o false positives?)
 5. Sumarizuj stav disku — čo je čitateľné, čo poškodené
@@ -167,9 +177,11 @@ Tvoja úloha JE PREDIKCIA — musíš domysleť čo nie je priamo viditeľné:
 
 Použij vedomosti o:
 - Typickom rozložení MBR/GPT partícií (alignment na 1MB/2048 sektorov)
-- Cluster size pre rôzne FS (FAT32: 4-32KB, NTFS: 4KB, EXT4: 4KB)
+- Cluster size pre rôzne FS (FAT32: 4-32KB, NTFS: 4KB, EXT4: 4KB, APFS: 4KB default)
 - Kde bývajú journaly, FAT tables, inode tables atď.
 - Ako vyzerá diskový priestor po zmazaní/poškodení
+- APFS špecifiká: Object Map (B-Tree), Space Manager, checkpoint descriptor/data oblasti,
+  Sealed volumes (macOS 11+), snapshot metadata, Fusion Drive APFS containers
 
 Odpovedaj VŽDY ako JSON:
 {
@@ -270,12 +282,14 @@ Metódy:
 - "partition_extract": extrahovanie celej partície a mountovanie
 - "fs_scan": skenovanie a rekonštrukcia súborového systému
 - "journal_recovery": obnovenie z journalu (EXT4, NTFS)
+- "apfs_container_extract": extrahovanie celého APFS kontajnera ako image
+- "apfs_volume_scan": skenovanie APFS volumes v rámci kontajnera a obnova súborov
 
 Odpovedaj VŽDY ako JSON:
 {
   "actions": [
     {
-      "action": "<raw_copy|file_carve|partition_extract|fs_scan|journal_recovery>",
+      "action": "<raw_copy|file_carve|partition_extract|fs_scan|journal_recovery|apfs_container_extract|apfs_volume_scan>",
       "priority": <int 1=first>,
       "offset": <byte offset kde začať>,
       "length": <počet bajtov alebo null=do konca>,
@@ -296,6 +310,7 @@ def run_recovery_planner(
     analyst_result: dict,
     predictor_result: dict,
     device_size: int,
+    apfs_hints: list[dict] | None = None,
 ) -> dict:
     """
     Agent 3 — zostavuje akčný plán obnovy.
@@ -307,6 +322,8 @@ def run_recovery_planner(
         "analyst_analysis": analyst_result,
         "predictor_map": predictor_result,
     }
+    if apfs_hints:
+        payload["apfs_recovery_hints"] = apfs_hints
 
     with client.messages.stream(
         model=MODEL,

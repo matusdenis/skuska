@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from scanner import scan_device
 from agents import run_map_analyst, run_map_predictor, run_recovery_planner
 from carver import RecoveryExecutor
+from apfs import scan_apfs, generate_apfs_recovery_hints
 
 
 def parse_size(s: str) -> int:
@@ -111,6 +112,30 @@ def run_recovery(
         print("       Pokračujem s prázdnou analýzou...")
 
     # ────────────────────────────────────────────────────
+    #  FÁZA 1b — APFS skenovanie (ak sa nájde APFS_NX/VOL)
+    # ────────────────────────────────────────────────────
+    apfs_hints: list[dict] = []
+    apfs_sigs = [s for s in scan_dict.get("signatures", []) if s.get("name", "").startswith("APFS")]
+    device_path_for_apfs = None if load_scan else device
+
+    if apfs_sigs and device_path_for_apfs:
+        print(f"\n[Fáza 1b] Nájdených {len(apfs_sigs)} APFS signátur — spúšťam APFS skener...")
+        try:
+            apfs_result = scan_apfs(device_path_for_apfs, max_bytes=max_scan, progress_cb=progress)
+            print()
+            apfs_hints = generate_apfs_recovery_hints(apfs_result)
+            print(f"  APFS: {len(apfs_result.containers)} kontajner(ov), "
+                  f"{len(apfs_result.volumes)} volume(s), "
+                  f"{len(apfs_hints)} hints pre plánovač")
+            apfs_path = out / f"apfs_{ts}.json"
+            save_artifact(apfs_result.to_dict(), apfs_path)
+        except Exception as e:
+            print(f"  [WARN] APFS skener zlyhal: {e}")
+    elif apfs_sigs:
+        print(f"\n[Fáza 1b] {len(apfs_sigs)} APFS signátur v načítanom scane "
+              "(APFS deep scan preskočený — pracujem z uloženého scanu)")
+
+    # ────────────────────────────────────────────────────
     #  FÁZA 2 — AI Analýza (Agent 1)
     # ────────────────────────────────────────────────────
     if load_analysis:
@@ -145,7 +170,8 @@ def run_recovery(
     #  FÁZA 4 — AI Plán obnovy (Agent 3)
     # ────────────────────────────────────────────────────
     print("\n[Fáza 4] Agent 3 zostavuje plán obnovy...")
-    recovery_plan = run_recovery_planner(analyst_result, predictor_result, device_size)
+    recovery_plan = run_recovery_planner(analyst_result, predictor_result, device_size,
+                                         apfs_hints=apfs_hints or None)
     plan_path = out / f"plan_{ts}.json"
     save_artifact(recovery_plan, plan_path)
 

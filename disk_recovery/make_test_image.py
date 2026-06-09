@@ -65,6 +65,17 @@ put(png_off + 8, struct.pack(">I", 13) + b"IHDR")
 sqlite_off = 8 * 1024 * 1024
 put(sqlite_off, b"SQLite format 3\x00")
 
+# APFS NX Container Superblock at 9 MB (magic at obj_start+32)
+apfs_nx_off = 9 * 1024 * 1024
+# 32-byte object header (checksum=0, oid, xid, obj_type, obj_subtype)
+put(apfs_nx_off, b"\x00" * 8)                          # checksum
+put(apfs_nx_off + 8, b"\x01\x00\x00\x00\x00\x00\x00\x00")  # oid
+put(apfs_nx_off + 16, b"\x01\x00\x00\x00\x00\x00\x00\x00") # xid
+put(apfs_nx_off + 24, b"\x01\x00\x00\x00")                  # obj_type (NX_SUPERBLOCK)
+put(apfs_nx_off + 28, b"\x00\x00\x00\x00")                  # obj_subtype
+put(apfs_nx_off + 32, b"BSXN")                              # APFS_NX_MAGIC (NXSB little-endian)
+put(apfs_nx_off + 36, struct.pack("<I", 4096))              # block_size = 4096
+
 # GPT header at second sector
 put(512, b"EFI PART")
 

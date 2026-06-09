@@ -25,6 +25,8 @@ FS_SIGNATURES: dict[str, bytes] = {
     "XFS":         b"XFSB",               # offset 0
     "BTRFS":       b"_BHRfS_M",           # offset 65600
     "exFAT":       b"EXFAT   ",           # offset 3
+    "APFS_NX":     b"BSXN",               # NXSB container magic at offset 32 in object
+    "APFS_VOL":    b"BSPA",               # APSB volume magic at offset 32 in object
 }
 
 # File type signatures (magic bytes at offset 0)
@@ -124,6 +126,26 @@ def _scan_window(data: bytes, base_offset: int) -> list[tuple[str, str, int]]:
     if len(data) >= 1082:
         if data[1080:1082] == FS_SIGNATURES["EXT2/3/4"]:
             found.append(("filesystem", "EXT2/3/4", base_offset + 1080))
+
+    # APFS: magic bytes sit at byte 32 within each APFS object (after the 32-byte obj header)
+    apfs_nx = FS_SIGNATURES["APFS_NX"]
+    apfs_vol = FS_SIGNATURES["APFS_VOL"]
+    search_pos = 0
+    while search_pos + 36 <= len(data):
+        idx = data.find(apfs_nx, search_pos)
+        if idx == -1:
+            break
+        if idx >= 32:
+            found.append(("filesystem", "APFS_NX", base_offset + idx - 32))
+        search_pos = idx + 4
+    search_pos = 0
+    while search_pos + 36 <= len(data):
+        idx = data.find(apfs_vol, search_pos)
+        if idx == -1:
+            break
+        if idx >= 32:
+            found.append(("filesystem", "APFS_VOL", base_offset + idx - 32))
+        search_pos = idx + 4
 
     # File type signatures
     for name, (pattern, rel_off) in FILE_SIGNATURES.items():

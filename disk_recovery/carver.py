@@ -181,6 +181,78 @@ class RecoveryExecutor:
         result["type"] = "partition_image"
         return result
 
+    def apfs_container_extract(
+        self, offset: int, length: int | None, output_name: str
+    ) -> dict:
+        """Extrahuje celý APFS kontajner ako raw image pomocou apfs.py."""
+        try:
+            from apfs import scan_apfs, extract_apfs_container, ApfsScanResult
+            out_path = self.output_dir / _safe_name(output_name + ".img")
+            print(f"  [apfs_container_extract] Skenujem APFS kontajner od offsetu {_human(offset)}...")
+
+            result = scan_apfs(self.device, max_bytes=(offset + length) if length else None)
+            container = next(
+                (c for c in result.containers if abs(c.offset - offset) < c.block_size * 16),
+                result.containers[0] if result.containers else None,
+            )
+
+            if container:
+                extracted = extract_apfs_container(
+                    self.device, container, str(out_path)
+                )
+                extracted["type"] = "apfs_container_image"
+                extracted["volumes_found"] = len(result.volumes)
+                return extracted
+            else:
+                # Fallback to raw copy if no container parsed
+                r = self.raw_copy(offset, length, output_name + ".img")
+                r["type"] = "apfs_raw_fallback"
+                r["note"] = "APFS container not parsed — raw copy performed"
+                return r
+        except Exception as e:
+            print(f"    [WARN] APFS extract failed ({e}), falling back to raw_copy")
+            r = self.raw_copy(offset, length, output_name + ".img")
+            r["type"] = "apfs_raw_fallback"
+            r["error"] = str(e)
+            return r
+
+    def apfs_volume_scan(
+        self, offset: int, length: int | None, output_name: str
+    ) -> dict:
+        """Skenuje APFS volumes a carve-uje súbory zo surových blokov."""
+        try:
+            from apfs import scan_apfs, generate_apfs_recovery_hints
+            print(f"  [apfs_volume_scan] APFS volume scan od offsetu {_human(offset)}...")
+
+            result = scan_apfs(self.device, max_bytes=(offset + length) if length else None)
+            hints = generate_apfs_recovery_hints(result)
+
+            out_dir = self.output_dir / _safe_name(output_name)
+            out_dir.mkdir(exist_ok=True)
+
+            carved_results = []
+            for hint in hints:
+                if hint.get("action") in ("apfs_container_extract", "raw_copy"):
+                    h_offset = hint.get("offset", offset)
+                    h_length = hint.get("length", length)
+                    h_name = hint.get("output_name", output_name + "_carved")
+                    r = self.file_carve(h_offset, h_length, str(out_dir / _safe_name(h_name)))
+                    carved_results.append(r)
+
+            return {
+                "type": "apfs_volume_scan",
+                "containers_found": len(result.containers),
+                "volumes_found": len(result.volumes),
+                "output_dir": str(out_dir),
+                "carved": carved_results,
+                "summary": result.summary(),
+            }
+        except Exception as e:
+            print(f"    [WARN] APFS volume scan failed ({e}), falling back to file_carve")
+            r = self.file_carve(offset, length, output_name)
+            r["error"] = str(e)
+            return r
+
     # ── Plan executor ────────────────────────────────────────────────
 
     def execute_plan(self, plan: dict) -> list[dict]:
@@ -204,9 +276,12 @@ class RecoveryExecutor:
             try:
                 if act_type == "raw_copy":
                     r = self.raw_copy(offset, length, output_name)
-                elif act_type in ("file_carve",):
-                    fs_type = action.get("filesystem")
+                elif act_type == "file_carve":
                     r = self.file_carve(offset, length, output_name)
+                elif act_type == "apfs_container_extract":
+                    r = self.apfs_container_extract(offset, length, output_name)
+                elif act_type == "apfs_volume_scan":
+                    r = self.apfs_volume_scan(offset, length, output_name)
                 elif act_type in ("partition_extract", "fs_scan", "journal_recovery"):
                     r = self.partition_extract(offset, length, output_name)
                 else:
