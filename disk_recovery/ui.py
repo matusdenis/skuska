@@ -505,14 +505,33 @@ async function loadDisks() {
     disks.forEach(d => {
       const el = document.createElement('div');
       el.className = 'ditem';
-      el.onclick = () => {
-        document.querySelectorAll('.ditem').forEach(x=>x.classList.remove('sel'));
-        el.classList.add('sel');
-        document.getElementById('device').value = d.path;
+      el.onclick = (e) => {
+        // Ak sa nekliklo priamo na checkbox, simuluj klik na neho
+        if (e.target.type !== 'checkbox') {
+          const cb = el.querySelector('input[type="checkbox"]');
+          if(cb) cb.checked = !cb.checked;
+        }
+        
+        // Zisti všetky zaškrtnuté a spoj ich do inputu
+        const checked = Array.from(document.querySelectorAll('.ditem input[type="checkbox"]:checked')).map(cb => cb.value);
+        
+        if (checked.length > 0) {
+            document.getElementById('device').value = checked.join(',');
+        } else {
+            document.getElementById('device').value = '';
+        }
+        
+        // Zvýrazni selected
+        document.querySelectorAll('.ditem').forEach(x => {
+          const c = x.querySelector('input[type="checkbox"]');
+          if (c && c.checked) x.classList.add('sel');
+          else x.classList.remove('sel');
+        });
+        
         checkSudoNeeded();
       };
       const ic = d.type==='disk' ? '💾' : '📄';
-      el.innerHTML = `<span>${ic}</span><div style="flex:1;overflow:hidden"><div class="dpath">${d.path}</div><div class="dmeta">${d.label.replace(d.path,'').trim()}</div></div><span class="dsize">${d.size}</span>`;
+      el.innerHTML = `<input type="checkbox" value="${d.path}" style="margin: 0 10px 0 5px; cursor: pointer;"><span>${ic}</span><div style="flex:1;overflow:hidden"><div class="dpath">${d.path}</div><div class="dmeta">${d.label.replace(d.path,'').trim()}</div></div><span class="dsize">${d.size}</span>`;
       list.appendChild(el);
     });
   } catch { list.innerHTML = '<div class="ditem"><span style="color:#f87171;font-size:.78rem">Chyba načítania</span></div>'; }
