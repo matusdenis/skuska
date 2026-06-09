@@ -316,7 +316,7 @@ input[type=text]:focus{border-color:#7c3aed}
     <div style="margin-top:.5rem">
       <label>Alebo zadaj cestu ručne</label>
       <div class="irow">
-        <input type="text" id="device" placeholder="/dev/sdb  alebo  disk.img">
+        <input type="text" id="device" placeholder="/dev/sdb  alebo  disk.img" oninput="checkSudoNeeded()">
         <button class="ibtn" onclick="openModal('device')" title="Prehľadávať">📂</button>
       </div>
     </div>
@@ -351,6 +351,12 @@ input[type=text]:focus{border-color:#7c3aed}
         <button class="ibtn" onclick="openModal('loadScan')">📂</button>
       </div>
     </div>
+  </div>
+
+  <div id="sudoRow" style="display:none">
+    <label>🔐 Heslo správcu (sudo)</label>
+    <input type="password" id="sudoPass" placeholder="Potrebné pre /dev/ zariadenia" autocomplete="current-password">
+    <div style="font-size:.7rem;color:#475569;margin-top:.25rem">Heslo sa použije len raz a nikde neuloží</div>
   </div>
 
   <div>
@@ -469,6 +475,11 @@ function switchTab(t) {
 // ═══════════════════════════════════════════════════════════════
 //  DISK LIST
 // ═══════════════════════════════════════════════════════════════
+function checkSudoNeeded() {
+  const dev = document.getElementById('device').value.trim();
+  document.getElementById('sudoRow').style.display = dev.startsWith('/dev/') ? 'block' : 'none';
+}
+
 async function loadDisks() {
   const list = document.getElementById('diskList');
   list.innerHTML = '<div class="ditem"><span style="color:#475569;font-size:.78rem">Načítavam…</span></div>';
@@ -482,7 +493,12 @@ async function loadDisks() {
     disks.forEach(d => {
       const el = document.createElement('div');
       el.className = 'ditem';
-      el.onclick = () => { document.querySelectorAll('.ditem').forEach(x=>x.classList.remove('sel')); el.classList.add('sel'); document.getElementById('device').value = d.path; };
+      el.onclick = () => {
+        document.querySelectorAll('.ditem').forEach(x=>x.classList.remove('sel'));
+        el.classList.add('sel');
+        document.getElementById('device').value = d.path;
+        checkSudoNeeded();
+      };
       const ic = d.type==='disk' ? '💾' : '📄';
       el.innerHTML = `<span>${ic}</span><div style="flex:1;overflow:hidden"><div class="dpath">${d.path}</div><div class="dmeta">${d.label.replace(d.path,'').trim()}</div></div><span class="dsize">${d.size}</span>`;
       list.appendChild(el);
@@ -724,11 +740,12 @@ function classify(l) {
 function startRecovery() {
   if (running) return;
   const params = new URLSearchParams({
-    device:   document.getElementById('device').value.trim(),
-    output:   document.getElementById('output').value.trim(),
-    max_scan: document.getElementById('maxScan').value.trim(),
-    dry_run:  document.getElementById('dryRun').checked?'1':'0',
-    load_scan:document.getElementById('skipScan').checked ? document.getElementById('loadScan').value.trim():'',
+    device:    document.getElementById('device').value.trim(),
+    output:    document.getElementById('output').value.trim(),
+    max_scan:  document.getElementById('maxScan').value.trim(),
+    dry_run:   document.getElementById('dryRun').checked?'1':'0',
+    load_scan: document.getElementById('skipScan').checked ? document.getElementById('loadScan').value.trim():'',
+    sudo_pass: document.getElementById('sudoPass').value,
   });
   clearTerminal();
   document.getElementById('rstrip').classList.remove('on');
@@ -846,27 +863,47 @@ def run():
         return Response("event: error_msg\ndata: Nezvolené zariadenie\n\n",
                         mimetype="text/event-stream")
 
-    cmd = [
-        sys.executable, "-u",
-        str(Path(__file__).parent / "orchestrator.py"),
-        "--device", device, "--output", output,
-    ]
-    if max_scan:  cmd += ["--max-scan", max_scan]
-    if dry_run:   cmd.append("--dry-run")
-    if load_scan: cmd += ["--load-scan", load_scan]
+    orchestrator = str(Path(__file__).parent / "orchestrator.py")
+    base_cmd = [sys.executable, "-u", orchestrator,
+                "--device", device, "--output", output]
+    if max_scan:  base_cmd += ["--max-scan", max_scan]
+    if dry_run:   base_cmd.append("--dry-run")
+    if load_scan: base_cmd += ["--load-scan", load_scan]
+
+    # Physical /dev/* devices need root on macOS/Linux
+    sudo_pass = request.args.get("sudo_pass", "").strip()
+    needs_sudo = device.startswith("/dev/") and os.geteuid() != 0
+    cmd = base_cmd
 
     def generate():
         global _proc
         with _lock:
             try:
-                _proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, env=os.environ.copy(),
-                    cwd=str(Path(__file__).parent),
-                )
+                if needs_sudo and sudo_pass:
+                    # Use sudo -S to read password from stdin
+                    full_cmd = ["sudo", "-S"] + base_cmd
+                    _proc = subprocess.Popen(
+                        full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        stdin=subprocess.PIPE,
+                        text=True, bufsize=1, env=os.environ.copy(),
+                        cwd=str(Path(__file__).parent),
+                    )
+                    _proc.stdin.write(sudo_pass + "\n")
+                    _proc.stdin.flush()
+                    _proc.stdin.close()
+                elif needs_sudo and not sudo_pass:
+                    yield "event: error_msg\ndata: Zariadenie /dev/ vyžaduje heslo správcu. Zadaj ho do poľa 'Sudo heslo'.\n\n"
+                    return
+                else:
+                    _proc = subprocess.Popen(
+                        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, env=os.environ.copy(),
+                        cwd=str(Path(__file__).parent),
+                    )
             except Exception as e:
                 yield f"event: error_msg\ndata: {e}\n\n"
                 return
+
 
         sig_c = part_c = reg_c = act_c = 0
         rate = ""
