@@ -26,8 +26,9 @@ def repair_apfs_gpt(image_path: str, apfs_start_sector: int, apfs_sector_count: 
         
         # 1. Protective MBR (LBA 0)
         mbr = bytearray(512)
+        mbr_size = min(total_sectors - 1, 0xFFFFFFFF)
         mbr[446:462] = struct.pack("<B 3B B 3B I I",
-            0x00, 0xFF, 0xFF, 0xFF, 0xEE, 0xFF, 0xFF, 0xFF, 1, total_sectors - 1)
+            0x00, 0xFF, 0xFF, 0xFF, 0xEE, 0xFF, 0xFF, 0xFF, 1, mbr_size)
         mbr[510:512] = b"\x55\xAA"
         
         os.lseek(fd, 0, os.SEEK_SET)

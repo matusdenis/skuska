@@ -24,12 +24,21 @@ def reconstruct_raid(
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         fds.append(fd)
         
-        # Zistíme veľkosť disku
-        import fcntl, struct
+        # Zistíme veľkosť disku robustne pre macOS
+        size = 0
         try:
-            buf = fcntl.ioctl(fd, 0x80081272, b" " * 8) # DKIOCGETBLOCKCOUNT
-            size = struct.unpack("Q", buf)[0]
-        except OSError:
+            import subprocess
+            out = subprocess.check_output(["diskutil", "info", path], text=True)
+            for line in out.splitlines():
+                if "Disk Size:" in line:
+                    # Riadok vyzerá takto: Disk Size: 1.0 TB (1000204886016 Bytes) ...
+                    parts = line.split("(")
+                    if len(parts) > 1:
+                        bytes_str = parts[1].split(" Bytes")[0]
+                        size = int(bytes_str)
+                        break
+        except Exception as e:
+            print(f"  [WARN] Nepodarilo sa zistiť veľkosť {path} cez diskutil: {e}")
             size = os.lseek(fd, 0, os.SEEK_END)
         
         sizes.append(size)
