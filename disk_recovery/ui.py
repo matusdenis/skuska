@@ -882,8 +882,8 @@ def run():
         with _lock:
             try:
                 if needs_sudo and sudo_pass:
-                    # Use sudo -S to read password from stdin
-                    full_cmd = ["sudo", "-S"] + base_cmd
+                    # Use sudo -S -E to read password from stdin and preserve environment variables
+                    full_cmd = ["sudo", "-S", "-E"] + base_cmd
                     _proc = subprocess.Popen(
                         full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         stdin=subprocess.PIPE,
