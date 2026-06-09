@@ -25,7 +25,9 @@ if _env_file.exists():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _, _v = _line.partition("=")
-            os.environ.setdefault(_k.strip(), _v.strip())
+            _v = _v.strip().strip('"').strip("'")   # odstráň uvodzovky
+            os.environ.setdefault(_k.strip(), _v)
+
 
 app = Flask(__name__)
 
