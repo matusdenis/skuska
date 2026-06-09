@@ -1,0 +1,113 @@
+{
+  "device": "disk_recovery/test_disk.img",
+  "device_size": 10485760,
+  "sector_size": 512,
+  "signatures": [
+    {
+      "offset": 510,
+      "sector": 0,
+      "sig_type": "filesystem",
+      "name": "MBR",
+      "raw_bytes": "55aa454649205041",
+      "context_hex": "0000000000000000000000000000000055aa4546492050415254000000000000"
+    },
+    {
+      "offset": 1049086,
+      "sector": 2048,
+      "sig_type": "filesystem",
+      "name": "MBR",
+      "raw_bytes": "55aa000000000000",
+      "context_hex": "0000000000000000000000000000000055aa0000000000000000000000000000"
+    },
+    {
+      "offset": 1048658,
+      "sector": 2048,
+      "sig_type": "filesystem",
+      "name": "FAT32",
+      "raw_bytes": "4641543332202020",
+      "context_hex": "0000000000000000000000000000000046415433322020200000000000000000"
+    },
+    {
+      "offset": 2097662,
+      "sector": 4096,
+      "sig_type": "filesystem",
+      "name": "MBR",
+      "raw_bytes": "55aa000000000000",
+      "context_hex": "0000000000000000000000000000000055aa0000000000000000000000000000"
+    },
+    {
+      "offset": 2097155,
+      "sector": 4096,
+      "sig_type": "filesystem",
+      "name": "NTFS",
+      "raw_bytes": "4e54465320202020",
+      "context_hex": "000000000000000000000000000000004e544653202020200000000000000000"
+    },
+    {
+      "offset": 3146808,
+      "sector": 6146,
+      "sig_type": "filesystem",
+      "name": "EXT2/3/4",
+      "raw_bytes": "53ef000000000000",
+      "context_hex": "0000000000000000000000000000000053ef0000000000000000000000000000"
+    },
+    {
+      "offset": 4194304,
+      "sector": 8192,
+      "sig_type": "file",
+      "name": "JPEG",
+      "raw_bytes": "ffd8ffe000104a46",
+      "context_hex": "00000000000000000000000000000000ffd8ffe000104a464946000000000000"
+    },
+    {
+      "offset": 5242880,
+      "sector": 10240,
+      "sig_type": "file",
+      "name": "PDF",
+      "raw_bytes": "255044462d312e37",
+      "context_hex": "00000000000000000000000000000000255044462d312e37312030206f626a0a"
+    },
+    {
+      "offset": 6291456,
+      "sector": 12288,
+      "sig_type": "file",
+      "name": "ZIP",
+      "raw_bytes": "504b030414000000",
+      "context_hex": "00000000000000000000000000000000504b0304140000000000000000000000"
+    },
+    {
+      "offset": 6291456,
+      "sector": 12288,
+      "sig_type": "file",
+      "name": "DOCX/XLSX",
+      "raw_bytes": "504b030414000000",
+      "context_hex": "00000000000000000000000000000000504b0304140000000000000000000000"
+    },
+    {
+      "offset": 7340032,
+      "sector": 14336,
+      "sig_type": "file",
+      "name": "PNG",
+      "raw_bytes": "89504e470d0a1a0a",
+      "context_hex": "0000000000000000000000000000000089504e470d0a1a0a0000000d49484452"
+    },
+    {
+      "offset": 8388608,
+      "sector": 16384,
+      "sig_type": "file",
+      "name": "SQLite",
+      "raw_bytes": "53514c6974652066",
+      "context_hex": "0000000000000000000000000000000053514c69746520666f726d6174203300"
+    },
+    {
+      "offset": 9437184,
+      "sector": 18432,
+      "sig_type": "filesystem",
+      "name": "APFS_NX",
+      "raw_bytes": "0000000000000000",
+      "context_hex": "0000000000000000000000000000000000000000000000000100000000000000"
+    }
+  ],
+  "scan_errors": [],
+  "sectors_scanned": 20480
+}

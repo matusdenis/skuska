@@ -121,7 +121,7 @@ def run_recovery(
     if apfs_sigs and device_path_for_apfs:
         print(f"\n[Fáza 1b] Nájdených {len(apfs_sigs)} APFS signátur — spúšťam APFS skener...")
         try:
-            apfs_result = scan_apfs(device_path_for_apfs, max_bytes=max_scan, progress_cb=progress)
+            apfs_result = scan_apfs(device_path_for_apfs, max_bytes=max_scan, progress_cb=None)
             print()
             apfs_hints = generate_apfs_recovery_hints(apfs_result)
             print(f"  APFS: {len(apfs_result.containers)} kontajner(ov), "
