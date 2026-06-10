@@ -852,6 +852,7 @@ expNavigate(document.getElementById('output').value || '.');
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
 _proc: subprocess.Popen | None = None
+_sudo_pass: str = ""
 _lock = threading.Lock()
 
 
@@ -913,7 +914,9 @@ def run():
     if load_scan: base_cmd += ["--load-scan", load_scan]
 
     # Physical /dev/* devices need root on macOS/Linux
-    sudo_pass = request.args.get("sudo_pass", "").strip()
+    global _sudo_pass
+    _sudo_pass = request.args.get("sudo_pass", "").strip()
+    sudo_pass = _sudo_pass
     needs_sudo = device.startswith("/dev/") and os.geteuid() != 0
     cmd = base_cmd
 
@@ -984,6 +987,25 @@ def stop():
             _proc.terminate()
     return jsonify({"ok": True})
 
+
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    """Úplne vypne aplikáciu a všetky jej procesy."""
+    print("Prijatý signál na vypnutie z webového rozhrania.")
+    try:
+        global _proc
+        if _proc and _proc.poll() is None:
+            if _sudo_pass:
+                subprocess.run(
+                    ["sudo", "-S", "pkill", "-9", "-f", "orchestrator.py"],
+                    input=f"{_sudo_pass}\n", text=True, capture_output=True
+                )
+            _proc.kill()
+    except Exception as e:
+        print(f"Chyba pri ukončovaní procesu: {e}")
+    
+    # Pre ukončenie samotného Flasku:
+    os._exit(0)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

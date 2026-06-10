@@ -87,7 +87,7 @@ signal.signal(signal.SIGTERM, cleanup)
 signal.signal(signal.SIGINT, cleanup)
 
 # ── Otvor v predvolenom prehliadači (garantované na macOS) ────
-subprocess.run(["open", URL])
+subprocess.run(["/usr/bin/open", URL])
 
 # ── Drž aplikáciu v Docku, kým ju užívateľ neukončí ─────────
 try:
