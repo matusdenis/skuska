@@ -451,12 +451,28 @@ def scan_apfs(
     fd = os.open(device_path, os.O_RDONLY | os.O_NONBLOCK)
     try:
         # Get device size
-        import fcntl as _fcntl
-        try:
-            buf = _fcntl.ioctl(fd, 0x80081272, b" " * 8)
-            dev_size = struct.unpack("Q", buf)[0]
-        except OSError:
-            dev_size = os.lseek(fd, 0, os.SEEK_END)
+        import platform
+        dev_size = 0
+        if platform.system() == "Darwin":
+            try:
+                import subprocess
+                out = subprocess.check_output(["diskutil", "info", device_path], text=True)
+                for line in out.splitlines():
+                    if "Disk Size:" in line:
+                        parts = line.split("(")
+                        if len(parts) > 1:
+                            bytes_str = parts[1].split(" Bytes")[0]
+                            dev_size = int(bytes_str)
+            except Exception:
+                pass
+                
+        if not dev_size:
+            import fcntl as _fcntl
+            try:
+                buf = _fcntl.ioctl(fd, 0x80081272, b" " * 8)
+                dev_size = struct.unpack("Q", buf)[0]
+            except OSError:
+                dev_size = os.lseek(fd, 0, os.SEEK_END)
 
         scan_limit = min(dev_size, max_bytes) if max_bytes else dev_size
 

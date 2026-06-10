@@ -25,8 +25,8 @@ FS_SIGNATURES: dict[str, bytes] = {
     "XFS":         b"XFSB",               # offset 0
     "BTRFS":       b"_BHRfS_M",           # offset 65600
     "exFAT":       b"EXFAT   ",           # offset 3
-    "APFS_NX":     b"BSXN",               # NXSB container magic at offset 32 in object
-    "APFS_VOL":    b"BSPA",               # APSB volume magic at offset 32 in object
+    "APFS_NX":     b"NXSB",               # NXSB container magic at offset 32 in object
+    "APFS_VOL":    b"APSB",               # APSB volume magic at offset 32 in object
 }
 
 # File type signatures (magic bytes at offset 0)

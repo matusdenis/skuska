@@ -36,6 +36,20 @@ class RecoveryExecutor:
         return os.open(self.device, os.O_RDONLY | os.O_NONBLOCK)
 
     def _device_size(self, fd: int) -> int:
+        import platform
+        if platform.system() == "Darwin" and getattr(self, 'device', None):
+            try:
+                import subprocess
+                out = subprocess.check_output(["diskutil", "info", self.device], text=True)
+                for line in out.splitlines():
+                    if "Disk Size:" in line:
+                        parts = line.split("(")
+                        if len(parts) > 1:
+                            bytes_str = parts[1].split(" Bytes")[0]
+                            return int(bytes_str)
+            except Exception:
+                pass
+                
         import fcntl, struct
         try:
             buf = fcntl.ioctl(fd, 0x80081272, b" " * 8)
