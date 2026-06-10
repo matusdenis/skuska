@@ -82,31 +82,13 @@ import signal
 signal.signal(signal.SIGTERM, cleanup)
 signal.signal(signal.SIGINT, cleanup)
 
-# ── Otvor aplikáciu vo vlastnom samostatnom okne (pywebview) ─
-try:
-    import webview
-    
-    # create_window vytvorí natívne okno bez Safari prvkov
-    window = webview.create_window(
-        "Disk Recovery AI", 
-        URL, 
-        width=1300, 
-        height=850, 
-        background_color='#101014'  # tmavé pozadie ladiace s UI
-    )
-    
-    # webview.start() zablokuje hlavné vlákno a drží okno otvorené
-    # Keď užívateľ klikne na červený krížik (zavrie okno), start() skončí
-    webview.start()
-    
-    # Akonáhle sa okno zavrelo, bezpečne všetko ukončíme
-    cleanup()
+# ── Otvor v predvolenom prehliadači ────────────────────────
+import webbrowser
+webbrowser.open(URL)
 
-except ImportError:
-    # Ak by pywebview náhodou zlyhal, použijeme fallback na Safari
-    subprocess.run(["open", "-a", "Safari", URL])
-    try:
-        while True:
-            time.sleep(1)
-    except BaseException:
-        cleanup()
+# ── Drž aplikáciu nažive, kým nie je ukončená z Docku ─────────
+try:
+    while True:
+        time.sleep(1)
+except BaseException:
+    cleanup()
