@@ -68,10 +68,23 @@ class RecoveryExecutor:
 
         print(f"  [raw_copy] {_human(offset)} + {_human(copy_len)} → {out_path.name}")
         copied = 0
+        import time
+        start_t = time.monotonic()
+        last_print = start_t
+        
         block = 1024 * 1024  # 1 MB chunks
         errors = 0
-
-        with open(out_path, "wb") as out:
+        copied = 0
+        mode = "wb"
+        
+        if out_path.exists():
+            existing_size = out_path.stat().st_size
+            if 0 < existing_size < copy_len:
+                print(f"  [raw_copy] Našiel sa nedokončený súbor, nadväzujem od {_human(existing_size)}...")
+                copied = existing_size
+                mode = "ab"
+        
+        with open(out_path, mode) as out:
             while copied < copy_len:
                 chunk = min(block, copy_len - copied)
                 try:
@@ -85,6 +98,14 @@ class RecoveryExecutor:
                     errors += 1
                     out.write(b"\x00" * chunk)
                     copied += chunk
+                
+                # Vypíš stav každých 5 sekúnd
+                now = time.monotonic()
+                if now - last_print > 5.0:
+                    pct = (copied / copy_len) * 100
+                    speed = copied / (now - start_t) / (1024*1024)
+                    print(f"  [{pct:.2f}%] Skopírované: {_human(copied)} / {_human(copy_len)} (Rýchlosť: {speed:.1f} MB/s, Chyby čítania: {errors})")
+                    last_print = now
 
         os.close(fd)
         return {"output": str(out_path), "bytes_copied": copied, "errors": errors}
