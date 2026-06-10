@@ -33,6 +33,10 @@ sys.path.insert(0, str(ROOT))
 PORT = 5001
 URL  = f"http://localhost:{PORT}"
 
+# ── Vyčisti port 5001, ak by tam zostal "duch" ────────────────
+subprocess.run("lsof -t -i :5001 | xargs kill -9 2>/dev/null || true", shell=True)
+time.sleep(0.5)
+
 # ── Spusti Flask server v background threade ─────────────────
 def _start_flask():
     from disk_recovery.ui import app as flask_app
