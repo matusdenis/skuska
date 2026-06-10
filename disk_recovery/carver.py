@@ -13,12 +13,12 @@ SECTOR = 512
 
 
 def _human(n: int) -> str:
+    n = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
             return f"{n:.1f} {unit}"
-        n //= 1024
+        n /= 1024
     return f"{n:.1f} PB"
-
 
 def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
