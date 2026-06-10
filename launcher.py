@@ -82,9 +82,8 @@ import signal
 signal.signal(signal.SIGTERM, cleanup)
 signal.signal(signal.SIGINT, cleanup)
 
-# ── Otvor v predvolenom prehliadači ────────────────────────
-import webbrowser
-webbrowser.open(URL)
+# ── Otvor v Safari (garantované fungovanie na macOS) ──────────
+subprocess.run(["open", "-a", "Safari", URL])
 
 # ── Drž aplikáciu nažive, kým nie je ukončená z Docku ─────────
 try:
