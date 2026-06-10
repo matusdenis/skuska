@@ -317,6 +317,9 @@ input[type=text]:focus{border-color:#7c3aed}
   <span class="badge badge-ai">Claude Opus 4.8</span>
   <span class="badge badge-apfs">APFS</span>
   <span style="margin-left:auto;font-size:.77rem;color:#475569">Multi-agent systém obnovy dát</span>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:.5rem">
+    <button onclick="shutdownApp()" style="background:#991b1b;color:#fff;border:none;padding:.3rem .75rem;border-radius:6px;font-size:.75rem;font-weight:600;cursor:pointer;transition:background 0.15s">🛑 Vypnúť celú aplikáciu</button>
+  </div>
 </header>
 
 <main>
@@ -803,6 +806,12 @@ function startRecovery() {
   evtSrc.addEventListener('done',      e=>{ finish('done', e.data||'Dokončené'); autoOpenFiles(); });
   evtSrc.addEventListener('error_msg', e=>{ log('CHYBA: '+e.data,'err2'); finish('err','Chyba'); });
   evtSrc.onerror = ()=>{ if(running) finish('err','Spojenie prerušené'); };
+}
+
+function shutdownApp() {
+  if (!confirm("Naozaj chcete natvrdo vypnúť celú aplikáciu? Zastavia sa všetky bežiace záchranné procesy.")) return;
+  fetch('/shutdown', {method:'POST'}).catch(()=>{});
+  document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;font-size:1.5rem;color:#94a3b8">Aplikácia bola bezpečne vypnutá. Môžete zavrieť túto kartu.</div>';
 }
 
 function stopRecovery() {
