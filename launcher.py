@@ -85,9 +85,21 @@ signal.signal(signal.SIGINT, cleanup)
 # ── Otvor v Safari (garantované fungovanie na macOS) ──────────
 subprocess.run(["open", "-a", "Safari", URL])
 
-# ── Drž aplikáciu nažive, kým nie je ukončená z Docku ─────────
+# ── Drž aplikáciu v Docku, kým ju užívateľ neukončí ─────────
 try:
-    while True:
-        time.sleep(1)
-except BaseException:
-    cleanup()
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()  # Skryje hlavné okno, ale nechá aplikáciu v systéme
+    
+    # Prepojíme príkaz "Quit" z Docku na našu funkciu cleanup
+    root.createcommand('::tk::mac::Quit', cleanup)
+    
+    # Tento loop drží ikonku aplikácie v Docku
+    root.mainloop()
+except Exception:
+    # Ak by tkinter zlyhal, použijeme fallback
+    try:
+        while True:
+            time.sleep(1)
+    except BaseException:
+        cleanup()
