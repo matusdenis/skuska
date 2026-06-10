@@ -37,11 +37,8 @@ cat > "$APP_DIR/Contents/Info.plist" << PLISTEOF
 </plist>
 PLISTEOF
 
-# Spustiteľný skript — zapisujeme cez python aby sa vyhlo problémom s heredoc escaping
-python3 - << PYEOF
-import os, stat
-
-script = r"""#!/bin/bash
+cat > "$MACOS_DIR/$APP_NAME" << 'SCRIPT_EOF'
+#!/bin/bash
 RESOURCES="$(cd "$(dirname "$0")/../Resources" && pwd)"
 PYTHON_BIN="$(cat "$RESOURCES/python_path.txt")"
 PROJECT_DIR="$(cat "$RESOURCES/project_dir.txt")"
@@ -59,14 +56,10 @@ if [ -f ".env" ]; then
 fi
 
 exec "$PYTHON_BIN" "$PROJECT_DIR/launcher.py"
-"""
+SCRIPT_EOF
 
-path = "$MACOS_DIR/$APP_NAME"
-with open(path, "w") as f:
-    f.write(script)
-os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-print("  Skript zapísaný.")
-PYEOF
+chmod +x "$MACOS_DIR/$APP_NAME"
+echo "  Skript zapísaný."
 
 # Odstráň quarantine (Gatekeeper)
 xattr -cr "$APP_DIR" 2>/dev/null || true
