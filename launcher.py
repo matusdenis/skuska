@@ -86,24 +86,39 @@ import signal
 signal.signal(signal.SIGTERM, cleanup)
 signal.signal(signal.SIGINT, cleanup)
 
-# ── Otvor v predvolenom prehliadači (garantované na macOS) ────
-subprocess.run(["/usr/bin/open", URL])
-
-# ── Drž aplikáciu v Docku, kým ju užívateľ neukončí ─────────
+# ── Otvor aplikáciu vo vlastnom samostatnom okne (pywebview) ─
 try:
-    import tkinter as tk
-    root = tk.Tk()
-    root.withdraw()  # Skryje hlavné okno, ale nechá aplikáciu v systéme
+    import webview
     
-    # Prepojíme príkaz "Quit" z Docku na našu funkciu cleanup
-    root.createcommand('::tk::mac::Quit', cleanup)
+    # Vytvorenie natívneho okna bez elementov prehliadača
+    window = webview.create_window(
+        "Disk Recovery AI", 
+        URL, 
+        width=1300, 
+        height=850, 
+        background_color='#101014'
+    )
     
-    # Tento loop drží ikonku aplikácie v Docku
-    root.mainloop()
-except Exception:
-    # Ak by tkinter zlyhal, použijeme fallback
+    # Spustenie Cocoa okna
+    webview.start()
+    
+    # Po zavretí okna užívateľom vyčisti procesy
+    cleanup()
+
+except ImportError:
+    # ── Otvor v predvolenom prehliadači (fallback) ────
+    subprocess.run(["/usr/bin/open", URL])
+    
+    # ── Drž aplikáciu v Docku/Termináli, kým ju užívateľ neukončí ─────────
     try:
-        while True:
-            time.sleep(1)
-    except BaseException:
-        cleanup()
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        root.createcommand('::tk::mac::Quit', cleanup)
+        root.mainloop()
+    except Exception:
+        try:
+            while True:
+                time.sleep(1)
+        except BaseException:
+            cleanup()
