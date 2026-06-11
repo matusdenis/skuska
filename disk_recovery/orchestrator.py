@@ -163,37 +163,13 @@ def run_recovery(
         scan_path = out / f"scan_{ts}.json"
         save_artifact(scan_dict, scan_path)
 
-        # FAST PATH pre APFS: Ak sme našli NXSB hlavičku, vieme to opraviť hneď!
+        # FAST PATH pre APFS bol dočasne vypnutý.
+        # Namiesto skratky vždy vynútime použitie AI agentov na hlbokú analýzu a rekonštrukciu mapy!
         apfs_sigs = [s for s in scan_report.signatures if s.name.startswith("APFS")]
-        if apfs_sigs and not load_scan:
-            print("\n" + "=" * 65)
-            print("  NÁJDENÁ APFS HLAVIČKA! PRESKAKUJEM AI PLÁNOVAČ.")
-            print("  Bude vygenerovaný natívny .img obraz s opravenou mapou.")
-            print("=" * 65)
-            
-            img_out = out / "reconstructed.img"
-            start_sector = apfs_sigs[0].sector
-            
-            if skip_execution:
-                print(f"  [Dry-run] Bol by vytvorený obraz {img_out} a prekopírovaných {human(device_size)}")
-            else:
-                from carver import RecoveryExecutor
-                print(f"  [Fáza 2] Kopírujem dáta do {img_out}...")
-                executor = RecoveryExecutor(device, str(out))
-                executor.raw_copy(0, device_size, "reconstructed.img")
-                
-                print(f"  [Fáza 3] Zapisujem novú GPT mapu...")
-                from gpt_repair import repair_apfs_gpt
-                repair_apfs_gpt(str(img_out), start_sector, (device_size // 512) - start_sector - 40)
-                
-            print("\n" + "=" * 65)
-            print("  HOTOVO! Zrekonštruovaný disk je pripravený.")
-            print(f"  Súbor: {img_out}")
-            print("  1. Dvojklikom na tento .img súbor vo Finderi ho pripojíš.")
-            print("  2. Súbory sa zobrazia aj s pôvodnými názvami a zložkami.")
-            print("=" * 65)
-            print(f"event: summary\ndata: Zrekonštruovaný obraz nájdeš tu: {img_out}. Dvojklikom ho pripoj v macOS.\n\n")
-            return
+        # if apfs_sigs and not load_scan:
+        #     print("\\n" + "=" * 65)
+        #     print("  NÁJDENÁ APFS HLAVIČKA! PRESKAKUJEM AI PLÁNOVAČ.")
+        #     ... [Fast Path deaktivovaný, ideme priamo na AI Fázu 1b, 2 a 3]
 
     if not scan_dict.get("signatures"):
         print("\n[WARN] Žiadne signátúry nenájdené. Zariadenie môže byť prázdne,")

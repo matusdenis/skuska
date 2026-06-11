@@ -173,14 +173,14 @@ class RecoveryExecutor:
                         "JPEG": 20 * 1024 * 1024,
                         "PNG":  20 * 1024 * 1024,
                         "ZIP":  200 * 1024 * 1024,
-                        "MP4":  2 * 1024 * 1024 * 1024,
+                        "MP4":  150 * 1024 * 1024 * 1024,  # Zvýšené na 150 GB (pre extrémne ProRes)
                         "SQLite": 100 * 1024 * 1024,
                     }
                     max_s = max_sizes.get(name, 10 * 1024 * 1024)
                     ext_map = {
                         "PDF": "pdf", "JPEG": "jpg", "PNG": "png", "GIF": "gif",
                         "ZIP": "zip", "DOCX/XLSX": "zip", "ELF": "bin",
-                        "SQLite": "db", "MP3": "mp3", "MP4": "mp4",
+                        "SQLite": "db", "MP3": "mp3", "MP4": "mov", # Zmenené na .mov pre iPhone
                         "AVI": "avi", "TAR": "tar", "7ZIP": "7z", "GZIP": "gz",
                     }
                     ext = ext_map.get(name, "bin")

@@ -34,9 +34,9 @@ def repair_apfs_gpt(image_path: str, apfs_start_sector: int, apfs_sector_count: 
         os.lseek(fd, 0, os.SEEK_SET)
         os.write(fd, mbr)
         
-        # 2. GPT Partition Entries (LBA 2)
-        # APFS GUID: 7C3457EF-0000-11AA-AA11-00306543ECAC
-        apfs_type_guid = bytes.fromhex("7C3457EF0000AA11AA1100306543ECAC")
+        # Entry 1: APFS (mixed-endian UUID format: EF57347C-0000-AA11-AA11-00306543ECAC)
+        # Standard string: 7C3457EF-0000-11AA-AA11-00306543ECAC
+        apfs_type_guid = bytes.fromhex("EF57347C0000AA11AA1100306543ECAC")
         part_uuid = uuid.uuid4().bytes_le
         
         entries = bytearray(128 * 128) # 128 entries
